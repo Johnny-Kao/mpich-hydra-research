@@ -34,7 +34,7 @@ jobs:
           gcc -std=c11 -O1 -Wall -Wextra -Werror -pthread -Isrc/pmi/include \
             -fsyntax-only research/hydra/pmi_lifecycle.c
 
-      - name: Build full upstream MPICH snapshot
+      - name: Bootstrap and configure MPICH
         run: |
           ./autogen.sh > research/hydra/results/autogen.log 2>&1 || { tail -n 100 research/hydra/results/autogen.log; exit 1; }
           ./configure --prefix="$RUNNER_TEMP/mpich" --with-pm=hydra \
@@ -43,16 +43,31 @@ jobs:
             --with-hwloc=embedded --disable-fortran --disable-cxx \
             --disable-doc --disable-dependency-tracking \
             > research/hydra/results/configure.log 2>&1 || { tail -n 100 research/hydra/results/configure.log; exit 1; }
+
+      - name: Build only PMI and MPL before full MPICH
+        run: |
+          make -C src/mpl -j 2 > research/hydra/results/mpl.log 2>&1 || { tail -n 100 research/hydra/results/mpl.log; exit 1; }
+          make -C src/pmi -j 2 > research/hydra/results/pmi.log 2>&1 || { tail -n 100 research/hydra/results/pmi.log; exit 1; }
+          test -f src/pmi/libpmi.la
+          test -f src/mpl/libmpl.la
+
+      - name: Link real PMI2 harness with libtool (early fail gate)
+        run: |
+          ./libtool --mode=link gcc -std=c11 -O1 -g -Wall -Wextra -Werror -pthread \
+            -Isrc/pmi/include research/hydra/pmi_lifecycle.c \
+            src/pmi/libpmi.la src/mpl/libmpl.la -ldl -lm \
+            -o research/hydra/pmi_lifecycle \
+            > research/hydra/results/harness-link.log 2>&1 || {
+              tail -n 100 research/hydra/results/harness-link.log
+              exit 1
+            }
+          test -x research/hydra/pmi_lifecycle
+          echo 'PMI2 HARNESS LINK PASS'
+
+      - name: Build and install full upstream MPICH snapshot
+        run: |
           make -j 2 > research/hydra/results/build.log 2>&1 || { tail -n 100 research/hydra/results/build.log; exit 1; }
           make install > research/hydra/results/install.log 2>&1 || { tail -n 100 research/hydra/results/install.log; exit 1; }
-
-      - name: Compile real PMI2 API reproducer
-        run: |
-          gcc -std=c11 -O1 -g -Wall -Wextra -Werror -pthread \
-            -Isrc/pmi/include -I"$RUNNER_TEMP/mpich/include" research/hydra/pmi_lifecycle.c \
-            -Lsrc/pmi/.libs -L"$RUNNER_TEMP/mpich/lib" \
-            -Wl,-rpath,"$RUNNER_TEMP/mpich/lib" -lpmi -lmpi \
-            -o research/hydra/pmi_lifecycle
 
       - name: Healthy PMI2 control
         run: |
