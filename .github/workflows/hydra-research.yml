@@ -1,0 +1,89 @@
+name: Hydra PMI lifecycle - manual research
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hydra-pmi-research
+  cancel-in-progress: true
+
+jobs:
+  linux-pmi:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout$v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Prepare environment
+        run: |
+          test -f src/pm/hydra/proxy/pmip_cb.c
+          test -f src/pmi/include/pmi2.h
+          test -f research/hydra/pmi_lifecycle.c
+          mkdir -p research/hydra/results
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends autoconf automake libtool pkg-config gfortran python3 libhwloc-dev libnuma-dev
+
+      - name: Build full upstream MPICH snapshot
+        run: |
+          ./autogen.sh > research/hydra/results/autogen.log 2>&1 || { tail -n 100 research/hydra/results/autogen.log; exit 1; }
+          ./configure --prefix="$RUNNER_TEMP/mpich" --with-pm=hydra \
+            --with-device=ch4:ofi --with-libfabric=embedded \
+            --with-yaksa=embedded --with-mpl=embedded \
+            --with-hwloc=embedded --disable-fortran --disable-cxx \
+            --disable-doc --disable-dependency-tracking \
+            > research/hydra/results/configure.log 2>&1 || { tail -n 100 research/hydra/results/configure.log; exit 1; }
+          make -j 2 > research/hydra/results/build.log 2>&1 || { tail -n 100 research/hydra/results/build.log; exit 1; }
+          make install > research/hydra/results/install.log 2>&1 || { tail -n 100 research/hydra/results/install.log; exit 1; }
+
+      - name: Compile real PMI2 API reproducer
+        run: |
+          gcc -std=c11 -O1 -g -Wall -Wextra -Werror -pthread \
+            -I"$RUNNER_TEMP/mpich/include" research/hydra/pmi_lifecycle.c \
+            -L"$RUNNER_TEMP/mpich/lib" -Wl,-rpath,"$RUNNER_TEMP/mpich/lib" \
+            -lpmi -o research/hydra/pmi_lifecycle
+
+      - name: Healthy PMI2 control
+        run: |
+          export PATH="$RUNNER_TEMP/mpich/bin:$PATH"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/mpich/lib:${LD_LIBRARY_PATH:-}"
+          export PMI_RESEARCH_DIR="$(mktemp -d)"
+          set -o pipefail
+          timeout -k 3s 30s mpiexec -n 2 ./research/hydra/pmi_lifecycle control \
+            2>&1 | tee research/hydra/results/control.log
+          grep -q 'CONTROL_GET rc=0 found=1 value=ready' research/hydra/results/control.log
+          test "$(grep -c 'CONTROL_DONE rank=' research/hydra/results/control.log)" -eq 2
+
+      - name: Fault-lifecycle experiment
+        run: |
+          export PATH="$RUNNER_TEMP/mpich/bin:$PATH"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/mpich/lib:${LD_LIBRARY_PATH:-}"
+          export PMI_RESEARCH_DIR="$(mktemp -d)"
+          set +e
+          timeout -k 3s 30s mpiexec -disable-auto-cleanup -n 3 \
+            ./research/hydra/pmi_lifecycle fault > research/hydra/results/fault.log 2>&1
+          result=$?
+          set -e
+          cat research/hydra/results/fault.log
+          echo "mpiexec_status=$result" | tee -a research/hydra/results/fault.log
+          if grep -q 'FAULT_PUT_DONE rc=0' research/hydra/results/fault.log && \
+             grep -q 'SURVIVOR_DONE rc=0' research/hydra/results/fault.log; then
+            echo 'classification=survivors_completed' | tee -a research/hydra/results/fault.log
+          else
+            echo 'classification=survivors_not_confirmed' | tee -a research/hydra/results/fault.log
+          fi
+          if [ "$result" -eq 124 ]; then echo '::error::Fault probe timed out'; exit 1; fi
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact$v4
+        with:
+          name: mpich-hydra-pmi-evidence
+          path: research/hydra/results/
+          retention-days: 7
+          if-no-files-found: ignore
