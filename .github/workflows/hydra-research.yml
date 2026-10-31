@@ -92,13 +92,22 @@ jobs:
           set -e
           cat research/hydra/results/fault.log
           echo "mpiexec_status=$result" | tee -a research/hydra/results/fault.log
+          if [ "$result" -eq 124 ]; then
+            echo '::error::Fault probe timed out'
+            exit 1
+          fi
+          if ! grep -q '^KILL_WAITER pid=' research/hydra/results/fault.log; then
+            echo '::error::Fault injection did not execute; result inconclusive'
+            exit 1
+          fi
           if grep -q 'FAULT_PUT_DONE rc=0' research/hydra/results/fault.log && \
              grep -q 'SURVIVOR_DONE rc=0' research/hydra/results/fault.log; then
             echo 'classification=survivors_completed' | tee -a research/hydra/results/fault.log
           else
             echo 'classification=survivors_not_confirmed' | tee -a research/hydra/results/fault.log
+            echo '::error::Survivor completion not confirmed; inspect process and callback logs before attributing cause'
+            exit 1
           fi
-          if [ "$result" -eq 124 ]; then echo '::error::Fault probe timed out'; exit 1; fi
 
       - name: Preserve evidence
         if: always()
