@@ -78,8 +78,8 @@ static void *blocking_get(void *arg)
 
 int main(int argc, char **argv)
 {
-    if (argc != 2 || (strcmp(argv[1], "control") && strcmp(argv[1], "fault"))) {
-        fprintf(stderr, "usage: %s control|fault\n", argv[0]); return 2;
+    if (argc != 2 || (strcmp(argv[1], "control") && strcmp(argv[1], "fault") && strcmp(argv[1], "fault-no-wait"))) {
+        fprintf(stderr, "usage: %s control|fault|fault-no-wait\n", argv[0]); return 2;
     }
     signal(SIGUSR1, SIG_IGN);
 
@@ -114,6 +114,13 @@ int main(int argc, char **argv)
 
     if (size != 3) return 8;
     if (rank == 0) {
+        if (!strcmp(argv[1], "fault-no-wait")) {
+            /* Same forced process exit, but no pending node-attribute request. */
+            delay_ms(1200);
+            mark_waiter();
+            while (1) pause();
+        }
+
         pthread_t tid;
         if (pthread_create(&tid, NULL, blocking_get, NULL)) return 9;
         delay_ms(1200); /* allow the PMI request to enter pending queue */
