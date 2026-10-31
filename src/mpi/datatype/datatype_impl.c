@@ -1,0 +1,547 @@
+/*
+ * Copyright (C) by Argonne National Laboratory
+ *     See COPYRIGHT in top-level directory
+ */
+
+#include "mpiimpl.h"
+
+int MPIR_Get_address_impl(const void *location, MPI_Aint * address)
+{
+    *address = (MPI_Aint) location;
+    return MPI_SUCCESS;
+}
+
+int MPIR_Get_count_impl(const MPI_Status * status, MPI_Datatype datatype, MPI_Aint * count)
+{
+    MPI_Aint size;
+
+    MPIR_Datatype_get_size_macro(datatype, size);
+    MPIR_Assert(size >= 0 && MPIR_STATUS_GET_COUNT(*status) >= 0);
+    if (size != 0) {
+        /* MPI-3 says return MPI_UNDEFINED if too large for an int */
+        if ((MPIR_STATUS_GET_COUNT(*status) % size) != 0)
+            (*count) = MPI_UNDEFINED;
+        else
+            (*count) = (MPI_Aint) (MPIR_STATUS_GET_COUNT(*status) / size);
+    } else {
+        if (MPIR_STATUS_GET_COUNT(*status) > 0) {
+            /* --BEGIN ERROR HANDLING-- */
+
+            /* case where datatype size is 0 and count is > 0 should
+             * never occur.
+             */
+
+            (*count) = MPI_UNDEFINED;
+            /* --END ERROR HANDLING-- */
+        } else {
+            /* This is ambiguous.  However, discussions on MPI Forum
+             * reached a consensus that this is the correct return
+             * value
+             */
+            (*count) = 0;
+        }
+    }
+    return MPI_SUCCESS;
+}
+
+int MPIR_Pack_impl(const void *inbuf, MPI_Aint incount, MPI_Datatype datatype,
+                   void *outbuf, MPI_Aint outsize, MPI_Aint * position, MPIR_Comm * comm_ptr)
+{
+    int mpi_errno = MPI_SUCCESS;
+    MPI_Aint actual_pack_bytes;
+    void *buf = (void *) ((char *) outbuf + *position);
+    mpi_errno = MPIR_Typerep_pack(inbuf, incount, datatype, 0, buf, outsize, &actual_pack_bytes,
+                                  MPIR_TYPEREP_FLAG_NONE);
+    MPIR_ERR_CHECK(mpi_errno);
+    *position += actual_pack_bytes;
+
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+int MPIR_Pack_external_impl(const char datarep[],
+                            const void *inbuf, MPI_Aint incount, MPI_Datatype datatype,
+                            void *outbuf, MPI_Aint outsize, MPI_Aint * position)
+{
+    int mpi_errno = MPI_SUCCESS;
+    MPI_Aint actual_pack_bytes;
+    void *buf = (void *) ((char *) outbuf + *position);
+    mpi_errno = MPIR_Typerep_pack_external(inbuf, incount, datatype, buf, &actual_pack_bytes);
+    MPIR_ERR_CHECK(mpi_errno);
+    *position += actual_pack_bytes;
+
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+int MPIR_Unpack_impl(const void *inbuf, MPI_Aint insize, MPI_Aint * position,
+                     void *outbuf, MPI_Aint outcount, MPI_Datatype datatype, MPIR_Comm * comm_ptr)
+{
+    int mpi_errno = MPI_SUCCESS;
+    MPI_Aint actual_unpack_bytes;
+    void *buf = (void *) ((char *) inbuf + *position);
+    mpi_errno =
+        MPIR_Typerep_unpack(buf, insize, outbuf, outcount, datatype, 0, &actual_unpack_bytes,
+                            MPIR_TYPEREP_FLAG_NONE);
+    MPIR_ERR_CHECK(mpi_errno);
+    *position += actual_unpack_bytes;
+
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+int MPIR_Unpack_external_impl(const char datarep[],
+                              const void *inbuf, MPI_Aint insize, MPI_Aint * position,
+                              void *outbuf, MPI_Aint outcount, MPI_Datatype datatype)
+{
+    int mpi_errno = MPI_SUCCESS;
+    MPI_Aint actual_unpack_bytes;
+    void *buf = (void *) ((char *) inbuf + *position);
+    mpi_errno = MPIR_Typerep_unpack_external(buf, outbuf, outcount, datatype, &actual_unpack_bytes);
+    MPIR_ERR_CHECK(mpi_errno);
+    *position += actual_unpack_bytes;
+
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+void MPIR_Pack_size(MPI_Aint incount, MPI_Datatype datatype, MPI_Aint * size)
+{
+    MPI_Aint typesize;
+    MPIR_Datatype_get_size_macro(datatype, typesize);
+    *size = incount * typesize;
+}
+
+int MPIR_Pack_size_impl(MPI_Aint incount, MPI_Datatype datatype, MPIR_Comm * comm_ptr,
+                        MPI_Aint * size)
+{
+    MPIR_Pack_size(incount, datatype, size);
+    return MPI_SUCCESS;
+}
+
+int MPIR_Pack_external_size_impl(const char *datarep,
+                                 MPI_Aint incount, MPI_Datatype datatype, MPI_Aint * size)
+{
+    *size = incount * MPIR_Typerep_size_external32(datatype);
+    return MPI_SUCCESS;
+}
+
+/* utility function for MPIR_Status_set_elements_x_impl.
+ * Recursively count the total number of bytes from a given number of elements, where
+ * we assume the datatype does not contain a single element type.
+ */
+static MPI_Count MPIR_Type_get_element_bytes(MPI_Count * elements_p,
+                                             MPI_Count count, MPI_Datatype datatype)
+{
+    if (HANDLE_IS_BUILTIN(datatype)) {
+        MPI_Count element_size = MPIR_Datatype_get_basic_size(datatype);
+        if (*elements_p > count) {
+            *elements_p -= count;
+            return count * element_size;
+        } else {
+            MPI_Count nbytes = (*elements_p) * element_size;
+            *elements_p = 0;
+            return nbytes;
+        }
+    }
+
+    MPIR_Datatype *datatype_ptr;
+    MPIR_Datatype_get_ptr(datatype, datatype_ptr);
+
+    if (datatype_ptr->builtin_element_size != -1) {
+        MPI_Count element_size = datatype_ptr->builtin_element_size;
+        count *= (datatype_ptr->size / element_size);
+        if (*elements_p > count) {
+            *elements_p -= count;
+            return count * element_size;
+        } else {
+            MPI_Count nbytes = (*elements_p) * element_size;
+            *elements_p = 0;
+            return nbytes;
+        }
+    }
+
+    /* let's peel the datatype layer by layer */
+    int *ints;
+    MPI_Aint *aints;
+    MPI_Aint *counts;
+    MPI_Datatype *types;
+
+    MPIR_Datatype_contents *cp = datatype_ptr->contents;
+    MPIR_Datatype_access_contents(cp, &ints, &aints, &counts, &types);
+    MPIR_Assert(ints && aints && counts && types);
+
+    switch (datatype_ptr->contents->combiner) {
+        case MPI_COMBINER_NAMED:
+        case MPI_COMBINER_DUP:
+        case MPI_COMBINER_RESIZED:
+            return MPIR_Type_get_element_bytes(elements_p, count, *types);
+        case MPI_COMBINER_CONTIGUOUS:
+        case MPI_COMBINER_VECTOR:
+        case MPI_COMBINER_HVECTOR:
+        case MPI_COMBINER_SUBARRAY:
+            if (cp->nr_counts == 0) {
+                return MPIR_Type_get_element_bytes(elements_p, count * ints[0], *types);
+            } else {
+                return MPIR_Type_get_element_bytes(elements_p, count * counts[0], *types);
+            }
+        case MPI_COMBINER_INDEXED_BLOCK:
+        case MPI_COMBINER_HINDEXED_BLOCK:
+            if (cp->nr_counts == 0) {
+                return MPIR_Type_get_element_bytes(elements_p, count * ints[0] * ints[1], *types);
+            } else {
+                return MPIR_Type_get_element_bytes(elements_p, count * counts[0] * counts[1],
+                                                   *types);
+            }
+        case MPI_COMBINER_INDEXED:
+        case MPI_COMBINER_HINDEXED:
+            {
+                MPI_Aint typecount = 0; /* total number of subtypes */
+                if (cp->nr_counts == 0) {
+                    for (int i = 0; i < ints[0]; i++) {
+                        typecount += ints[i + 1];
+                    }
+                } else {
+                    for (MPI_Aint i = 0; i < counts[0]; i++) {
+                        typecount += counts[i + 1];
+                    }
+                }
+                return MPIR_Type_get_element_bytes(elements_p, count * typecount, *types);
+            }
+        case MPI_COMBINER_STRUCT:
+            if (cp->nr_counts == 0) {
+                MPI_Count nbytes = 0;
+                for (MPI_Count j = 0; j < count; j++) {
+                    for (int i = 0; i < ints[0]; i++) {
+                        /* skip zero-count elements of the struct */
+                        if (ints[i + 1] == 0)
+                            continue;
+
+                        nbytes += MPIR_Type_get_element_bytes(elements_p, ints[i + 1], types[i]);
+                        if (*elements_p == 0) {
+                            return nbytes;
+                        }
+                    }
+                }
+                return nbytes;
+            } else {
+                MPI_Count nbytes = 0;
+                for (MPI_Count j = 0; j < count; j++) {
+                    for (MPI_Count i = 0; i < counts[0]; i++) {
+                        /* skip zero-count elements of the struct */
+                        if (counts[i + 1] == 0)
+                            continue;
+
+                        nbytes += MPIR_Type_get_element_bytes(elements_p, counts[i + 1], types[i]);
+                        if (*elements_p == 0) {
+                            return nbytes;
+                        }
+                    }
+                }
+                return nbytes;
+            }
+        case MPI_COMBINER_DARRAY:
+        case MPI_COMBINER_F90_REAL:
+        case MPI_COMBINER_F90_COMPLEX:
+        case MPI_COMBINER_F90_INTEGER:
+#ifndef MPICH_BUILD_MPI_ABI
+        case MPI_COMBINER_HVECTOR_INTEGER:
+        case MPI_COMBINER_HINDEXED_INTEGER:
+        case MPI_COMBINER_STRUCT_INTEGER:
+#endif
+        default:
+            /* --BEGIN ERROR HANDLING-- */
+            MPIR_Assert(0);
+            return 0;
+            /* --END ERROR HANDLING-- */
+    }
+}
+
+int MPIR_Status_set_elements_x_impl(MPI_Status * status, MPI_Datatype datatype, MPI_Count count)
+{
+    int mpi_errno = MPI_SUCCESS;
+    MPI_Count nbytes;
+
+    if (HANDLE_IS_BUILTIN(datatype)) {
+        nbytes = count * MPIR_Datatype_get_basic_size(datatype);
+    } else {
+        MPIR_Datatype *datatype_ptr;
+        MPIR_Datatype_get_ptr(datatype, datatype_ptr);
+        if (datatype_ptr->builtin_element_size != -1) {
+            nbytes = count * datatype_ptr->builtin_element_size;
+        } else {
+            if (datatype_ptr->size == 0) {
+                nbytes = 0;
+            } else {
+                MPI_Count orig_count = count;
+                nbytes = MPIR_Type_get_element_bytes(&count, 1, datatype);
+                /* it'll be so much easier if we store datatype_ptr->nr_elements */
+                if (count > 0) {
+                    MPI_Count nr_elements = orig_count - count;
+                    nbytes *= (orig_count / nr_elements);
+
+                    MPI_Count remain = orig_count % nr_elements;
+                    nbytes += MPIR_Type_get_element_bytes(&remain, 1, datatype);
+                }
+            }
+        }
+    }
+
+    MPIR_STATUS_SET_COUNT(*status, nbytes);
+
+    return mpi_errno;
+}
+
+int MPIR_Type_commit_impl(MPI_Datatype * datatype_p)
+{
+    int mpi_errno = MPI_SUCCESS;
+    MPIR_Datatype *datatype_ptr;
+
+    MPIR_Assert(!HANDLE_IS_BUILTIN(*datatype_p));
+
+    MPIR_Datatype_get_ptr(*datatype_p, datatype_ptr);
+
+    if (datatype_ptr->is_committed == 0) {
+        datatype_ptr->is_committed = 1;
+
+        MPIR_Typerep_commit(*datatype_p);
+
+        MPL_DBG_MSG_D(MPIR_DBG_DATATYPE, TERSE, "# contig blocks = %d\n",
+                      (int) datatype_ptr->typerep.num_contig_blocks);
+
+        MPID_Type_commit_hook(datatype_ptr);
+
+    }
+    return mpi_errno;
+}
+
+int MPIR_Type_free_impl(MPI_Datatype * datatype)
+{
+    MPIR_Datatype *datatype_ptr = NULL;
+
+    MPIR_Datatype_get_ptr(*datatype, datatype_ptr);
+    MPIR_Assert(datatype_ptr);
+    MPIR_Datatype_ptr_release(datatype_ptr);
+    *datatype = MPI_DATATYPE_NULL;
+
+    return MPI_SUCCESS;
+}
+
+int MPIR_Type_get_extent_impl(MPI_Datatype datatype, MPI_Aint * lb, MPI_Aint * extent)
+{
+    MPI_Count lb_x, extent_x;
+
+    MPIR_Type_get_extent_x_impl(datatype, &lb_x, &extent_x);
+    *lb = (lb_x > MPIR_AINT_MAX) ? MPI_UNDEFINED : (MPI_Aint) lb_x;
+    *extent = (extent_x > MPIR_AINT_MAX) ? MPI_UNDEFINED : (MPI_Aint) extent_x;
+    return MPI_SUCCESS;
+}
+
+int MPIR_Type_get_extent_x_impl(MPI_Datatype datatype, MPI_Count * lb, MPI_Count * extent)
+{
+    if (HANDLE_IS_BUILTIN(datatype)) {
+        *lb = 0;
+        *extent = MPIR_Datatype_get_basic_size(datatype);
+    } else {
+        MPIR_Datatype *datatype_ptr = NULL;
+        MPIR_Datatype_get_ptr(datatype, datatype_ptr);
+        *lb = datatype_ptr->lb;
+        *extent = datatype_ptr->extent; /* derived, should be same as ub - lb */
+    }
+    return MPI_SUCCESS;
+}
+
+int MPIR_Type_get_true_extent_impl(MPI_Datatype datatype, MPI_Aint * true_lb,
+                                   MPI_Aint * true_extent)
+{
+    MPI_Count true_lb_x, true_extent_x;
+
+    MPIR_Type_get_true_extent_x_impl(datatype, &true_lb_x, &true_extent_x);
+    *true_lb = (true_lb_x > MPIR_AINT_MAX) ? MPI_UNDEFINED : (MPI_Aint) true_lb_x;
+    *true_extent = (true_extent_x > MPIR_AINT_MAX) ? MPI_UNDEFINED : (MPI_Aint) true_extent_x;
+
+    return MPI_SUCCESS;
+}
+
+/* any non-MPI functions go here, especially non-static ones */
+
+int MPIR_Type_get_true_extent_x_impl(MPI_Datatype datatype, MPI_Count * true_lb,
+                                     MPI_Count * true_extent)
+{
+    if (HANDLE_IS_BUILTIN(datatype)) {
+        *true_lb = 0;
+        *true_extent = MPIR_Datatype_get_basic_size(datatype);
+    } else {
+        MPIR_Datatype *datatype_ptr = NULL;
+        MPIR_Datatype_get_ptr(datatype, datatype_ptr);
+        *true_lb = datatype_ptr->true_lb;
+        *true_extent = datatype_ptr->true_ub - datatype_ptr->true_lb;
+    }
+
+    return MPI_SUCCESS;
+}
+
+int MPIR_Type_get_value_index_impl(MPI_Datatype value_type, MPI_Datatype index_type,
+                                   MPI_Datatype * pair_type)
+{
+    int mpi_errno = MPI_SUCCESS;
+
+    if (index_type == MPI_INT) {
+        if (value_type == MPI_FLOAT) {
+            *pair_type = MPI_FLOAT_INT;
+        } else if (value_type == MPI_DOUBLE) {
+            *pair_type = MPI_DOUBLE_INT;
+        } else if (value_type == MPI_LONG) {
+            *pair_type = MPI_LONG_INT;
+        } else if (value_type == MPI_SHORT) {
+            *pair_type = MPI_SHORT_INT;
+        } else if (value_type == MPI_INT) {
+            *pair_type = MPI_2INT;
+        } else if (value_type == MPI_LONG_DOUBLE) {
+            *pair_type = MPI_LONG_DOUBLE_INT;
+        } else {
+            *pair_type = MPI_DATATYPE_NULL;
+        }
+    } else {
+        *pair_type = MPI_DATATYPE_NULL;
+    }
+
+    return mpi_errno;
+}
+
+int MPIR_Type_size_impl(MPI_Datatype datatype, MPI_Aint * size)
+{
+    int mpi_errno = MPI_SUCCESS;
+
+    MPIR_Datatype_get_size_macro(datatype, *size);
+    MPIR_Assert(*size >= 0);
+
+    return mpi_errno;
+}
+
+int MPIR_Type_size_x_impl(MPI_Datatype datatype, MPI_Count * size)
+{
+    int mpi_errno = MPI_SUCCESS;
+
+    MPIR_Datatype_get_size_macro(datatype, *size);
+
+    return mpi_errno;
+}
+
+static MPI_Datatype type_match_size(MPI_Datatype type_list[], int nTypes, int size)
+{
+    for (int i = 0; i < nTypes; i++) {
+        MPI_Aint tsize;
+        MPI_Datatype type = type_list[i];
+        MPIR_DATATYPE_REPLACE_BUILTIN(type);
+        MPIR_Datatype_get_size_macro(type, tsize);
+        if (tsize == size) {
+            return type_list[i];
+        }
+    }
+    return MPI_DATATYPE_NULL;
+}
+
+
+int MPIR_Type_match_size_impl(int typeclass, int size, MPI_Datatype * datatype)
+{
+    int mpi_errno = MPI_SUCCESS;
+
+    /* Note that all of the datatype have values, even if the type is
+     * not available. We test for that case separately.  We also
+     * prefer the Fortran types to the C type, if they are available */
+    static MPI_Datatype real_types[] = {
+        MPI_REAL2, MPI_REAL4, MPI_REAL8, MPI_REAL16,
+        MPI_FLOAT, MPI_DOUBLE, MPI_LONG_DOUBLE,
+    };
+    static MPI_Datatype int_types[] = {
+        MPI_INTEGER1, MPI_INTEGER2, MPI_INTEGER4, MPI_INTEGER8, MPI_INTEGER16,
+        MPI_CHAR, MPI_SHORT, MPI_INT, MPI_LONG, MPI_LONG_LONG,
+    };
+    static MPI_Datatype complex_types[] = {
+        MPI_COMPLEX4, MPI_COMPLEX8, MPI_COMPLEX16, MPI_COMPLEX32,
+        MPI_C_FLOAT_COMPLEX, MPI_C_DOUBLE_COMPLEX, MPI_C_LONG_DOUBLE_COMPLEX,
+    };
+
+    /* The following implementation follows the suggestion in the
+     * MPI-2 standard.
+     * The version in the MPI-2 spec makes use of the Fortran optional types;
+     * currently, we don't support these from C (see mpi.h.in).
+     * Thus, we look at the candidate types and make use of the first fit.
+     * Note that the standard doesn't require that this routine return
+     * any particular choice of MPI datatype; e.g., it is not required
+     * to return MPI_INTEGER4 if a 4-byte integer is requested.
+     */
+    int n;
+    MPI_Datatype matched_datatype = MPI_DATATYPE_NULL;
+#ifdef HAVE_ERROR_CHECKING
+    const char *tname = NULL;
+#endif
+
+    switch (typeclass) {
+        case MPI_TYPECLASS_REAL:
+            n = sizeof(real_types) / sizeof(MPI_Datatype);
+            matched_datatype = type_match_size(real_types, n, size);
+#ifdef HAVE_ERROR_CHECKING
+            tname = "MPI_TYPECLASS_REAL";
+#endif
+            break;
+        case MPI_TYPECLASS_INTEGER:
+            n = sizeof(int_types) / sizeof(MPI_Datatype);
+            matched_datatype = type_match_size(int_types, n, size);
+#ifdef HAVE_ERROR_CHECKING
+            tname = "MPI_TYPECLASS_INTEGER";
+#endif
+            break;
+        case MPI_TYPECLASS_COMPLEX:
+            n = sizeof(complex_types) / sizeof(MPI_Datatype);
+            matched_datatype = type_match_size(complex_types, n, size);
+#ifdef HAVE_ERROR_CHECKING
+            tname = "MPI_TYPECLASS_COMPLEX";
+#endif
+            break;
+        default:
+            MPIR_ERR_SETANDSTMT(mpi_errno, MPI_ERR_ARG, break, "**typematchnoclass");
+    }
+
+    if (matched_datatype == MPI_DATATYPE_NULL) {
+        MPIR_ERR_SETANDJUMP2(mpi_errno, MPI_ERR_ARG, "**typematchsize", "**typematchsize %s %d",
+                             tname, size);
+    } else {
+        *datatype = matched_datatype;
+    }
+
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+int MPIR_Type_get_name_impl(MPIR_Datatype * datatype_ptr, char *type_name, int *resultlen)
+{
+    if (datatype_ptr == NULL) {
+        MPL_strncpy(type_name, "MPI_DATATYPE_NULL", MPI_MAX_OBJECT_NAME);
+    } else {
+        /* Include the null in MPI_MAX_OBJECT_NAME */
+        MPL_strncpy(type_name, datatype_ptr->name, MPI_MAX_OBJECT_NAME);
+    }
+    *resultlen = (int) strlen(type_name);
+
+    return MPI_SUCCESS;
+}
+
+int MPIR_Type_set_name_impl(MPIR_Datatype * datatype_ptr, const char *type_name)
+{
+    /* Include the null in MPI_MAX_OBJECT_NAME */
+    MPL_strncpy(datatype_ptr->name, type_name, MPI_MAX_OBJECT_NAME);
+
+    return MPI_SUCCESS;
+}

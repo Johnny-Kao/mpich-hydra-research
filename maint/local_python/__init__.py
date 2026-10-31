@@ -1,0 +1,226 @@
+##
+## Copyright (C) by Argonne National Laboratory
+##     See COPYRIGHT in top-level directory
+##
+
+import os
+import re
+import sys
+
+def get_srcdir():
+    m = re.match(r'(.*)\/maint\/local_python', __file__)
+    if m:
+        return m.group(1)
+    elif re.match(r'maint\/local_python', __file__):
+        return "."
+    else:
+        raise Exception("Can't determine srcdir from __file__")
+
+def get_binding_dir(srcdir):
+    if os.path.exists(srcdir + "/src/binding/mpi_standard_api.txt"):
+        return srcdir + "/src/binding"
+    elif os.path.exists(srcdir + "/maint/mpi_standard_api.txt"):
+        return srcdir + "/maint"
+    else:
+        raise Exception("Can't find mpi_standard_api.txt")
+
+# RE class allows convenience of using regex capture in a condition
+class RE:
+    m = None
+    def match(pat, str, flags=0):
+        RE.m = re.match(pat, str, flags)
+        return RE.m
+    def search(pat, str, flags=0):
+        RE.m = re.search(pat, str, flags)
+        return RE.m
+
+# Global data used across modules
+class MPI_API_Global:
+    srcdir = get_srcdir()
+    binding_dir = get_binding_dir(srcdir)
+    if os.path.exists("mpif_h"):
+        # stand-alone fortran binding
+        f77_dir = "mpif_h"
+        f90_dir = "use_mpi"
+        f08_dir = "use_mpi_f08"
+    elif os.path.exists("src/binding/c"):
+        c_dir = "src/binding/c"
+        abi_dir = "src/binding/abi"
+        f77_dir = "src/binding/fortran/mpif_h"
+        f90_dir = "src/binding/fortran/use_mpi"
+        f08_dir = "src/binding/fortran/use_mpi_f08"
+    else:
+        raise Exception("Can't determine output directories")
+
+    def is_autogen():
+        return MPI_API_Global.srcdir == "."
+
+    def get_srcdir_path(path):
+        # assume path is a relative path from top srcdir
+        return MPI_API_Global.srcdir + "/" + path
+
+    def check_write_path(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    # command line options and arguments for generating Fortran bindings
+    # By default assumes sizes for LP64 model. These options should be supplied at configure
+    # time or directly parsed from mpi.h.
+    # The F08 bindings use the sizes to detect duplicate large interfaces
+    # The F90 bindings use the sizes to implement MPI_SIZEOF (although deprecated in MPI-4)
+    opts = {'fint-size':4, 'aint-size':8, 'count-size':8, 'cint-size':4, 'f-logical-size':4,
+            'integer-kind':4, 'address-kind':8, 'count-kind':8, 'offset-kind':8,
+            'max-processor-name':128, 'max-version-string':8192, 'max-error-string':512, 'bsend-overhead':96,
+            'mpi-h':'src/include/mpi.h.in',
+            'iso-c-binding':'yes', 'f77-use-exclaim':False, 'f77-use-real8':False}
+
+    args = []
+    # output
+    out = []
+    # api
+    FUNCS = {}
+    MAPS = {}
+    default_descriptions = {}
+    # misc globals used during code generation
+    err_codes = {}
+    mpi_sources = []
+    mpi_declares = []
+    impl_declares = []
+    io_impl_declares = []
+    mpi_errnames = []
+    mpix_symbols = {}
+
+    handle_list = ["MPI_Comm", "MPI_Datatype", "MPI_Errhandler", "MPI_File", "MPI_Group", "MPI_Info", "MPI_Op", "MPI_Request", "MPI_Win", "MPI_Message", "MPI_Session", "MPIX_Stream"]
+
+    handle_mpir_types = {
+        'COMMUNICATOR': "MPIR_Comm",
+        'GROUP': "MPIR_Group",
+        'DATATYPE': "MPIR_Datatype",
+        'ERRHANDLER': "MPIR_Errhandler",
+        'OPERATION': "MPIR_Op",
+        'INFO': "MPIR_Info",
+        'WINDOW': "MPIR_Win",
+        'KEYVAL': "MPII_Keyval",
+        'REQUEST': "MPIR_Request",
+        'MESSAGE': "MPIR_Request",
+        'SESSION': "MPIR_Session",
+        'GREQUEST_CLASS': "MPIR_Grequest_class",
+        'STREAM': "MPIR_Stream",
+    }
+
+    # C types that have conversion apis, e.g. MPI_Comm_{from,to}int
+    handle_conversions = {
+        'MPI_Comm': "MPI_Comm",
+        'MPI_Group': "MPI_Group",
+        'MPI_Datatype': "MPI_Type",
+        'MPI_Errhandler': "MPI_Errhandler",
+        'MPI_Op': "MPI_Op",
+        'MPI_Info': "MPI_Info",
+        'MPI_Win': "MPI_Win",
+        'MPI_Request': "MPI_Request",
+        'MPI_Session': "MPI_Session",
+        'MPI_File': "MPI_File",
+        'MPIX_Stream': "MPIX_Stream",
+    }
+
+    handle_error_codes = {
+        'COMMUNICATOR': "MPI_ERR_COMM",
+        'GROUP': "MPI_ERR_GROUP",
+        'DATATYPE': "MPI_ERR_TYPE",
+        'ERRHANDLER': "MPI_ERR_ERRHANDLER",
+        'OPERATION': "MPI_ERR_OP",
+        'INFO': "MPI_ERR_INFO",
+        'WINDOW': "MPI_ERR_WIN",
+        'KEYVAL': "MPI_ERR_KEYVAL",
+        'REQUEST': "MPI_ERR_REQUEST",
+        'MESSAGE': "MPI_ERR_REQUEST",
+        'SESSION': "MPI_ERR_SESSION",
+        'GREQUEST_CLASS': "",
+        'STREAM': "MPIX_ERR_STREAM",
+    }
+
+    handle_out_do_ptrs = {
+        'COMMUNICATOR': 1,
+        'GROUP': 1,
+        'DATATYPE': 1,
+        'ERRHANDLER': 1,
+        'OPERATION': 1,
+        'INFO': 1,
+        'WINDOW': 1,
+        # 'KEYVAL': 1,
+        'REQUEST': 1,
+        'MESSAGE': 1,
+        'SESSION': 1,
+        'GREQUEST_CLASS': 1,
+        'STREAM': 1,
+    }
+
+    handle_NULLs = {
+        'COMMUNICATOR': "MPI_COMM_NULL",
+        'GROUP': "MPI_GROUP_NULL",
+        'DATATYPE': "MPI_DATATYPE_NULL",
+        'ERRHANDLER': "MPI_ERRHANDLER_NULL",
+        'OPERATION': "MPI_OP_NULL",
+        'INFO': "MPI_INFO_NULL",
+        'WINDOW': "MPI_WIN_NULL",
+        'KEYVAL': "MPI_KEYVAL_INVALID",
+        'REQUEST': "MPI_REQUEST_NULL",
+        'MESSAGE': "MPI_MESSAGE_NULL",
+        'SESSION': "MPI_SESSION_NULL",
+        # 'GREQUEST_CLASS': "",
+        'STREAM': "MPIX_STREAM_NULL",
+    }
+
+    copyright_c = [
+        "/*",
+        " * Copyright (C) by Argonne National Laboratory",
+        " *     See COPYRIGHT in top-level directory",
+        " */",
+        "",
+        "/* -- THIS FILE IS AUTO-GENERATED -- */",
+        ""
+    ]
+
+    copyright_mk = [
+        "##",
+        "## Copyright (C) by Argonne National Laboratory",
+        "##     See COPYRIGHT in top-level directory",
+        "##",
+        "",
+        "# -- THIS FILE IS AUTO-GENERATED -- ",
+        ""
+    ]
+
+    copyright_f77 = [
+        "C      ",
+        "C      Copyright (C) by Argonne National Laboratory",
+        "C          See COPYRIGHT in top-level directory",
+        "C      ",
+        "C      ",
+        "C      -- THIS FILE IS AUTO-GENERATED -- ",
+        "C      ",
+    ]
+
+    copyright_f90 = [
+        "!",
+        "! Copyright (C) by Argonne National Laboratory",
+        "!     See COPYRIGHT in top-level directory",
+        "!",
+        "",
+        "! -- THIS FILE IS AUTO-GENERATED -- ",
+        ""
+    ]
+
+    def parse_cmdline():
+        print("  [", " ".join(sys.argv), "]")
+        for a in sys.argv[1:]:
+            if RE.match(r'--?([\w-]+)=(.*)', a):
+                MPI_API_Global.opts[RE.m.group(1)] = RE.m.group(2)
+            elif RE.match(r'--?([\w-].+)', a):
+                MPI_API_Global.opts[RE.m.group(1)] = 1
+            else:
+                MPI_API_Global.args.append(a)
+
+        if 'skip-mpix' in MPI_API_Global.opts:
+            MPI_API_Global.handle_list.remove("MPIX_Stream")
+            del MPI_API_Global.handle_conversions["MPIX_Stream"]
+

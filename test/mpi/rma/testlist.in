@@ -1,0 +1,208 @@
+winname 2
+allocmem 2
+putfidx 4
+adlb_mimic1 3
+accfence2 4
+getgroup 4
+transpose1 2
+transpose2 2
+transpose3 2
+transpose3 2 arg=-use-win-allocate
+transpose5 2
+transpose6 1
+transpose7 2
+test1 2
+test2 2
+test2 2 arg=-use-win-allocate
+test3 2
+test3 2 arg=-use-win-allocate
+test4 2
+test5 2
+lockcontention 3
+lockcontention2 4
+lockcontention2 8
+lockcontention3 8
+lockopts 2
+transpose4 2
+fetchandadd 7
+fetchandadd_tree 7
+wintest 2
+wintest 2 arg=-use-win-allocate
+contig_displ 1
+test1_am 2
+test2_am 2
+test2_am 2 arg=-use-win-allocate
+test3_am 2
+test3_am 2 arg=-use-win-allocate
+test4_am 2
+test5_am 2
+fetchandadd_am 7
+fetchandadd_tree_am 7
+accfence2_am 4
+test1_dt 2 timeLimit=30
+nullpscw 7
+nullpscw 7 arg=-use-win-allocate
+attrorderwin 1
+wincall 2
+baseattrwin 1
+fkeyvalwin 1
+selfrma 1
+mixedsync 4
+locknull 2
+rmanull 2
+rmazero 2
+strided_acc_indexed 2
+strided_acc_onelock 2
+strided_acc_subarray 2
+strided_get_indexed 2
+strided_putget_indexed 4
+strided_putget_indexed_shared 4
+strided_getacc_indexed 4
+strided_getacc_indexed_shared 4
+window_creation 2
+window_creation 4 arg=-use-win-allocate
+window_creation 4 arg=-use-win-allocate-noncontig
+window_attach 4
+window_attach 4 arg=-collattach
+contention_put 4
+contention_putget 4
+put_base 2
+put_bottom 2
+win_flavors 4
+win_flavors 3
+manyrma2 2 timeLimit=500
+manyrma2 2 arg=-use-win-allocate timeLimit=500
+manyrma3 2
+win_shared 4
+win_shared_create 4 arg=-use-alloc-shm
+win_shared_create 4
+win_shared_noncontig 4
+win_shared_noncontig_put 4
+win_shared_query 4 arg=-flavor=create
+win_shared_query 4 arg=-flavor=allocate
+win_shared_query 4 arg=-flavor=allocate_shared
+win_zero 4
+win_large_shm 4 mem=4.0
+win_large_shm 3 mem=3.0
+win_dynamic_acc 4
+win_dynamic_acc 4 arg=-collattach
+get_acc_local 1
+linked_list 4
+linked_list_fop 4
+compare_and_swap 4
+fetch_and_op 4 arg=-type=char
+fetch_and_op 4 arg=-type=short
+fetch_and_op 4 arg=-type=int
+fetch_and_op 4 arg=-type=long
+fetch_and_op 4 arg=-type=double
+fetch_and_op 4 arg=-type=long_double
+fetch_and_op 4 arg=-type=char arg=-hwacc
+fetch_and_op 4 arg=-type=short arg=-hwacc
+fetch_and_op 4 arg=-type=int arg=-hwacc
+fetch_and_op 4 arg=-type=long arg=-hwacc
+fetch_and_op 4 arg=-type=double arg=-hwacc
+fetch_and_op 4 arg=-type=long_double arg=-hwacc
+fetch_and_op 4 arg=-type=char arg=-hwacc arg=-accop
+fetch_and_op 4 arg=-type=short arg=-hwacc arg=-accop
+fetch_and_op 4 arg=-type=int arg=-hwacc arg=-accop
+fetch_and_op 4 arg=-type=long arg=-hwacc arg=-accop
+fetch_and_op 4 arg=-type=double arg=-hwacc arg=-accop
+fetch_and_op 4 arg=-type=long_double arg=-hwacc arg=-accop
+get_accumulate 4 arg=-type=double
+get_accumulate 4 arg=-type=double arg=-derived
+get_accumulate 4 arg=-type=int
+get_accumulate 4 arg=-type=int arg=-derived
+get_accumulate 4 arg=-type=long
+get_accumulate 4 arg=-type=long arg=-derived
+get_accumulate 4 arg=-type=short
+get_accumulate 4 arg=-type=short arg=-derived
+flush 4
+reqops 4
+rputget 2
+req_example 4
+req_example 4 arg=-use-alloc-shm
+rput_local_comp 2
+racc_local_comp 2
+linked_list_lockall 4
+pscw_ordering 4
+pscw_ordering 4 arg=-use-win-allocate
+linked_list_bench_lock_all 4
+linked_list_bench_lock_excl 4
+linked_list_bench_lock_shr 4
+linked_list_bench_lock_shr 4 arg=-use-mode-nocheck
+mutex_bench 4
+mutex_bench 4 arg=-use-win-shared
+mutex_bench 4 arg=-use-alloc-shm
+mutex_bench 4 arg=-use-alloc-shm arg=-use-contig-rank
+rma_contig 2 arg=-iter=10
+rma_contig 2 arg=-iter=10000
+badrma 2
+acc_loc 4
+acc_ordering 2
+fence_shm 2
+win_shared_zerobyte 4
+win_shared_put_flush_get 4
+get_struct 2
+at_complete 2
+atomic_rmw_fop 3
+atomic_rmw_cas 3
+atomic_rmw_gacc 3
+atomic_get 3 arg=-pairtype=short timeLimit=300
+atomic_get 3 arg=-pairtype=int timeLimit=300
+atomic_get 3 arg=-pairtype=long timeLimit=300
+atomic_get 3 arg=-pairtype=float timeLimit=300
+atomic_get 3 arg=-pairtype=double timeLimit=300
+atomic_get 3 arg=-pairtype=long_double timeLimit=300
+aint 2
+aint 2 arg=-collattach
+acc_pairtype 2
+acc_pairtype 2 arg=-use-win-allocate
+manyget 2
+derived_acc_flush_local 3
+large_acc_flush_local 3
+large_small_acc 2
+win_dynamic_rma_flush_get 2 arg=-count=4096 arg=-op=put
+win_dynamic_rma_flush_get 2 arg=-count=4096 arg=-op=acc
+win_dynamic_rma_flush_get 2 arg=-count=4096 arg=-op=gacc
+win_dynamic_rma_flush_get 2 arg=-count=1 arg=-op=fop
+win_dynamic_rma_flush_get 2 arg=-count=1 arg=-op=cas
+win_dynamic_rma_flush_get 2 arg=-count=9216 arg=-op=put
+win_dynamic_rma_flush_get 2 arg=-count=9216 arg=-op=acc
+win_dynamic_rma_flush_get 2 arg=-count=9216 arg=-op=gacc
+win_dynamic_rma_flush_get 2 arg=-count=4096 arg=-op=put arg=-collattach
+win_dynamic_rma_flush_get 2 arg=-count=4096 arg=-op=acc arg=-collattach
+win_dynamic_rma_flush_get 2 arg=-count=4096 arg=-op=gacc arg=-collattach
+win_dynamic_rma_flush_get 2 arg=-count=1 arg=-op=fop arg=-collattach
+win_dynamic_rma_flush_get 2 arg=-count=1 arg=-op=cas arg=-collattach
+win_dynamic_rma_flush_get 2 arg=-count=9216 arg=-op=put arg=-collattach
+win_dynamic_rma_flush_get 2 arg=-count=9216 arg=-op=acc arg=-collattach
+win_dynamic_rma_flush_get 2 arg=-count=9216 arg=-op=gacc arg=-collattach
+win_shared_rma_flush_load 3 arg=-op=put
+win_shared_rma_flush_load 3 arg=-op=acc
+win_shared_rma_flush_load 3 arg=-op=gacc
+win_shared_rma_flush_load 3 arg=-op=fop
+win_shared_rma_flush_load 3 arg=-op=cas
+wrma_flush_get 3 arg=-op=put
+wrma_flush_get 3 arg=-op=acc
+wrma_flush_get 3 arg=-op=gacc
+wrma_flush_get 3 arg=-op=fop
+wrma_flush_get 3 arg=-op=cas
+rget_unlock 2
+overlap_wins_rma 3 arg=-op=put
+overlap_wins_rma 3 arg=-op=put
+overlap_wins_rma 3 arg=-op=put
+overlap_wins_rma 3 arg=-op=put
+overlap_wins_rma 3 arg=-op=put
+lock_nested 3
+rget_testall 2
+get_flushlocal 4
+get_flushlocal 4 arg=-use-win-allocate
+win_shared_query_null 4
+
+## This test is not strictly correct.  This was meant to test out the
+## case when MPI_Test is not nonblocking.  However, we ended up
+## assuming that MPI_Win_lock will be nonblocking.  That is not
+## specified by the standard and might not be true.  Commenting this
+## out till be find a better way to test the original problem with
+## MPI_Test.
+# nb_test 2

@@ -1,0 +1,31 @@
+/*
+ * Copyright (C) by Argonne National Laboratory
+ *     See COPYRIGHT in top-level directory
+ */
+
+/* This file creates strings for the most important configuration options.
+   These are then used in the file src/mpi/init/initthread.c to initialize
+   global variables that will then be included in both the library and
+   executables, providing a way to determine what version and features of
+   MPICH were used with a particular library or executable.
+*/
+#ifndef MPICHINFO_H_INCLUDED
+#define MPICHINFO_H_INCLUDED
+
+#define MPICH_CONFIGURE_ARGS_CLEAN "@CONFIGURE_ARGS_CLEAN@"
+#define MPICH_VERSION_DATE "@MPICH_RELEASE_DATE@"
+#define MPICH_DEVICE "@DEVICE@"
+#define MPICH_COMPILER_CC "@MPICH_COMPILER_CC@"
+#define MPICH_COMPILER_CXX "@MPICH_COMPILER_CXX@"
+#define MPICH_COMPILER_F77 "@MPICH_COMPILER_F77@"
+#define MPICH_COMPILER_FC "@MPICH_COMPILER_FC@"
+#define MPICH_CUSTOM_STRING "@MPICH_CUSTOM_STRING@"
+#ifdef MPICH_BUILD_MPI_ABI
+#define MPICH_ABIVERSION "@ABI_ABIVERSION@"
+#else
+#define MPICH_ABIVERSION "@ABIVERSION@"
+#endif
+
+#define MPICH_YAKSA_INFO "@MPICH_YAKSA_INFO@"
+
+#endif

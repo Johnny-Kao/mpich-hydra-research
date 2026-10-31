@@ -1,0 +1,385 @@
+/*
+ * Copyright (C) by Argonne National Laboratory
+ *     See COPYRIGHT in top-level directory
+ */
+
+#ifdef ENABLE_PMI1
+
+/* Key for parent port name on spawn */
+#define PMI1_KVS_PARENT_PORT_NAME "PARENT_ROOT_PORT_NAME"
+
+static int pmi1_init(int *has_parent, int *rank, int *size, int *appnum)
+{
+    int mpi_errno = MPI_SUCCESS;
+    int pmi_errno;
+
+    pmi_errno = PMI_Init(has_parent);
+    MPIR_ERR_CHKANDJUMP1(pmi_errno != PMI_SUCCESS, mpi_errno, MPI_ERR_OTHER,
+                         "**pmi_init", "**pmi_init %d", pmi_errno);
+    pmi_errno = PMI_Get_rank(rank);
+    MPIR_ERR_CHKANDJUMP1(pmi_errno != PMI_SUCCESS, mpi_errno, MPI_ERR_OTHER,
+                         "**pmi_get_rank", "**pmi_get_rank %d", pmi_errno);
+    pmi_errno = PMI_Get_size(size);
+    MPIR_ERR_CHKANDJUMP1(pmi_errno != PMI_SUCCESS, mpi_errno, MPI_ERR_OTHER,
+                         "**pmi_get_size", "**pmi_get_size %d", pmi_errno);
+    pmi_errno = PMI_Get_appnum(appnum);
+    MPIR_ERR_CHKANDJUMP1(pmi_errno != PMI_SUCCESS, mpi_errno, MPI_ERR_OTHER,
+                         "**pmi_get_appnum", "**pmi_get_appnum %d", pmi_errno);
+
+    int pmi_max_kvs_name_length;
+    pmi_errno = PMI_KVS_Get_name_length_max(&pmi_max_kvs_name_length);
+    MPIR_ERR_CHKANDJUMP1(pmi_errno != PMI_SUCCESS, mpi_errno, MPI_ERR_OTHER,
+                         "**pmi_kvs_get_name_length_max",
+                         "**pmi_kvs_get_name_length_max %d", pmi_errno);
+    pmi_kvs_name = (char *) MPL_malloc(pmi_max_kvs_name_length, MPL_MEM_OTHER);
+    pmi_errno = PMI_KVS_Get_my_name(pmi_kvs_name, pmi_max_kvs_name_length);
+    MPIR_ERR_CHKANDJUMP1(pmi_errno != PMI_SUCCESS, mpi_errno, MPI_ERR_OTHER,
+                         "**pmi_kvs_get_my_name", "**pmi_kvs_get_my_name %d", pmi_errno);
+
+    pmi_errno = PMI_KVS_Get_key_length_max(&pmi_max_key_size);
+    MPIR_ERR_CHKANDJUMP1(pmi_errno != PMI_SUCCESS, mpi_errno, MPI_ERR_OTHER,
+                         "**pmi_kvs_get_key_length_max",
+                         "**pmi_kvs_get_key_length_max %d", pmi_errno);
+    pmi_errno = PMI_KVS_Get_value_length_max(&pmi_max_val_size);
+    MPIR_ERR_CHKANDJUMP1(pmi_errno != PMI_SUCCESS, mpi_errno, MPI_ERR_OTHER,
+                         "**pmi_kvs_get_value_length_max",
+                         "**pmi_kvs_get_value_length_max %d", pmi_errno);
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+static void pmi1_exit(void)
+{
+    PMI_Finalize();
+}
+
+static void pmi1_abort(int exit_code, const char *error_msg)
+{
+    /* abort messages may contain spaces. Since there is no specific use case for error_msg,
+     * simplify it with a stub message. */
+    PMI_Abort(exit_code, "abort");
+}
+
+static int pmi1_put(const char *key, const char *val)
+{
+    int mpi_errno = MPI_SUCCESS;
+    int pmi_errno;
+
+    pmi_errno = PMI_KVS_Put(pmi_kvs_name, key, val);
+    MPIR_ERR_CHKANDJUMP1(pmi_errno != PMI_SUCCESS, mpi_errno, MPI_ERR_OTHER,
+                         "**pmi_kvs_put", "**pmi_kvs_put %d", pmi_errno);
+    pmi_errno = PMI_KVS_Commit(pmi_kvs_name);
+    MPIR_ERR_CHKANDJUMP1(pmi_errno != PMI_SUCCESS, mpi_errno, MPI_ERR_OTHER,
+                         "**pmi_kvs_commit", "**pmi_kvs_commit %d", pmi_errno);
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+static int pmi1_get(int src, const char *key, char *val, int val_size)
+{
+    int mpi_errno = MPI_SUCCESS;
+    int pmi_errno;
+
+    /* src is not used in PMI1 */
+    pmi_errno = PMI_KVS_Get(pmi_kvs_name, key, val, val_size);
+    MPIR_ERR_CHKANDJUMP1(pmi_errno != PMI_SUCCESS, mpi_errno, MPI_ERR_OTHER,
+                         "**pmi_kvs_get", "**pmi_kvs_get %d", pmi_errno);
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+static int pmi1_get_parent(char *parent_port, int port_size)
+{
+    return pmi1_get(-1, PMI1_KVS_PARENT_PORT_NAME, parent_port, port_size);
+}
+
+static bool pmi1_get_jobattr(const char *key, char *valbuf)
+{
+    int pmi_errno = PMI_KVS_Get(pmi_kvs_name, key, valbuf, pmi_max_val_size);
+    if (pmi_errno != PMI_SUCCESS) {
+        return false;
+    }
+
+    /* we either get "unavailable" or a valid filename */
+    if (strcmp(valbuf, "unavailable") == 0) {
+        return false;
+    }
+
+    return true;
+}
+
+static int pmi1_barrier(void)
+{
+    int mpi_errno = MPI_SUCCESS;
+    int pmi_errno;
+
+    pmi_errno = PMI_Barrier();
+    MPIR_ERR_CHKANDJUMP1(pmi_errno != PMI_SUCCESS, mpi_errno, MPI_ERR_OTHER,
+                         "**pmi_barrier", "**pmi_barrier %d", pmi_errno);
+
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+static int pmi1_barrier_local(void)
+{
+    return pmi1_barrier();
+}
+
+static int pmi1_barrier_group(int *group, int count, const char *stringtag)
+{
+#ifdef HAVE_PMI_BARRIER_GROUP
+    int mpi_errno = MPI_SUCCESS;
+    int pmi_errno;
+
+    int *use_group;
+    if (group == MPIR_PMI_GROUP_WORLD) {
+        use_group = PMI_GROUP_WORLD;
+    } else if (group == MPIR_PMI_GROUP_SELF) {
+        use_group = PMI_GROUP_SELF;
+    } else {
+        use_group = group;
+    }
+
+    pmi_errno = PMI_Barrier_group(use_group, count, stringtag);
+    MPIR_ERR_CHKANDJUMP1(pmi_errno != PMI_SUCCESS, mpi_errno, MPI_ERR_OTHER,
+                         "**pmi_barrier_group", "**pmi_barrier_group %d", pmi_errno);
+
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+#else
+    return MPI_ERR_INTERN;
+#endif
+}
+
+static int pmi1_optimized_put(const char *key, const char *val, int is_local)
+{
+    return pmi1_put(key, val);
+}
+
+static int pmi1_optimized_get(int src, const char *key, char *val, int valsize, int is_local)
+{
+    return pmi1_get(src, key, val, valsize);
+}
+
+static int pmi1_optional_bcast_barrier(MPIR_PMI_DOMAIN domain)
+{
+    return pmi1_barrier();
+}
+
+static int pmi1_get_universe_size(int *universe_size)
+{
+    int mpi_errno = MPI_SUCCESS;
+    int pmi_errno;
+
+    pmi_errno = PMI_Get_universe_size(universe_size);
+    MPIR_ERR_CHKANDJUMP1(pmi_errno != PMI_SUCCESS, mpi_errno, MPI_ERR_OTHER,
+                         "**pmi_get_universe_size", "**pmi_get_universe_size %d", pmi_errno);
+
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+static int pmi1_spawn(int count, char *commands[], char **argvs[], const int maxprocs[],
+                      MPIR_Info * info_ptrs[], char *port_name, int *pmi_errcodes)
+{
+    int mpi_errno = MPI_SUCCESS;
+    int pmi_errno;
+    INFO_TYPE preput;
+    int have_preput = 0;
+
+    int *info_keyval_sizes = NULL;
+    INFO_TYPE **info_keyval_vectors = NULL;
+    mpi_errno = get_info_kv_vectors(count, info_ptrs, &info_keyval_vectors, &info_keyval_sizes);
+    MPIR_ERR_CHECK(mpi_errno);
+
+    if (port_name != NULL) {
+        INFO_TYPE_KEY(preput) = PMI1_KVS_PARENT_PORT_NAME;
+        INFO_TYPE_VAL(preput) = port_name;
+        have_preput = 1;
+    }
+
+    pmi_errno = PMI_Spawn_multiple(count, (const char **) commands, (const char ***) argvs,
+                                   maxprocs, info_keyval_sizes,
+                                   (const PMI_keyval_t **) info_keyval_vectors,
+                                   have_preput, (const PMI_keyval_t *) &preput,
+                                   pmi_errcodes);
+
+    MPIR_ERR_CHKANDJUMP1(pmi_errno != PMI_SUCCESS, mpi_errno, MPI_ERR_OTHER,
+                         "**pmi_spawn_multiple", "**pmi_spawn_multiple %d", pmi_errno);
+
+  fn_exit:
+    free_pmi_keyvals(info_keyval_vectors, count, info_keyval_sizes);
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+static int pmi1_publish(const char name[], const char port[])
+{
+    int mpi_errno = MPI_SUCCESS;
+    int pmi_errno;
+    pmi_errno = PMI_Publish_name(name, port);
+    MPIR_ERR_CHKANDJUMP1(pmi_errno, mpi_errno, MPI_ERR_NAME, "**namepubnotpub",
+                         "**namepubnotpub %s", name);
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+static int pmi1_lookup(const char name[], char port[], int port_len)
+{
+    int mpi_errno = MPI_SUCCESS;
+    int pmi_errno;
+#ifdef PMI_MAX_PORT_NAME
+    int maxlen = PMI_MAX_PORT_NAME;
+#else
+    int maxlen = MPI_MAX_PORT_NAME;
+#endif
+    char *tmpbuf = NULL;
+
+    if (port_len >= maxlen) {
+        pmi_errno = PMI_Lookup_name(name, port);
+    } else {
+        /* allocate a temporary buffer for safety */
+        tmpbuf = MPL_malloc(maxlen, MPL_MEM_OTHER);
+        pmi_errno = PMI_Lookup_name(name, tmpbuf);
+        if (pmi_errno == PMI_SUCCESS) {
+            int mpl_err = MPL_strncpy(port, tmpbuf, port_len);
+            MPIR_ERR_CHKANDJUMP1(mpl_err, mpi_errno, MPI_ERR_NAME, "**namepubtrunc",
+                                 "**namepubtrunc %s", name);
+        }
+    }
+    MPIR_ERR_CHKANDJUMP1(pmi_errno, mpi_errno, MPI_ERR_NAME, "**namepubnotfound",
+                         "**namepubnotfound %s", name);
+
+  fn_exit:
+    if (tmpbuf) {
+        MPL_free(tmpbuf);
+    }
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+static int pmi1_unpublish(const char name[])
+{
+    int mpi_errno = MPI_SUCCESS;
+    int pmi_errno;
+    pmi_errno = PMI_Unpublish_name(name);
+    MPIR_ERR_CHKANDJUMP1(pmi_errno, mpi_errno, MPI_ERR_SERVICE, "**namepubnotunpub",
+                         "**namepubnotunpub %s", name);
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+#else /* ENABLE_PMI1 */
+
+static int pmi1_init(int *has_parent, int *rank, int *size, int *appnum)
+{
+    return MPI_ERR_INTERN;
+}
+
+static void pmi1_exit(void)
+{
+    MPIR_Assert(0);
+}
+
+static void pmi1_abort(int exit_code, const char *error_msg)
+{
+    MPIR_Assert(0);
+}
+
+static int pmi1_put(const char *key, const char *val)
+{
+    return MPI_ERR_INTERN;
+}
+
+static int pmi1_get(int src, const char *key, char *val, int val_size)
+{
+    return MPI_ERR_INTERN;
+}
+
+static int pmi1_get_parent(char *parent_port, int port_size)
+{
+    return MPI_ERR_INTERN;
+}
+
+static bool pmi1_get_jobattr(const char *key, char *valbuf)
+{
+    MPIR_Assert(0);
+    return false;
+}
+
+static int pmi1_barrier(void)
+{
+    return MPI_ERR_INTERN;
+}
+
+static int pmi1_barrier_local(void)
+{
+    return MPI_ERR_INTERN;
+}
+
+static int pmi1_barrier_group(int *group, int count, const char *string)
+{
+    return MPI_ERR_INTERN;
+}
+
+static int pmi1_optimized_put(const char *key, const char *val, int is_local)
+{
+    return MPI_ERR_INTERN;
+}
+
+static int pmi1_optimized_get(int src, const char *key, char *val, int valsize, int is_local)
+{
+    return MPI_ERR_INTERN;
+}
+
+static int pmi1_optional_bcast_barrier(MPIR_PMI_DOMAIN domain)
+{
+    return MPI_ERR_INTERN;
+}
+
+static int pmi1_get_universe_size(int *universe_size)
+{
+    return MPI_ERR_INTERN;
+}
+
+static int pmi1_spawn(int count, char *commands[], char **argvs[], const int maxprocs[],
+                      MPIR_Info * info_ptrs[], char *port_name, int *pmi_errcodes)
+{
+    return MPI_ERR_INTERN;
+}
+
+static int pmi1_publish(const char name[], const char port[])
+{
+    return MPI_ERR_INTERN;
+}
+
+static int pmi1_lookup(const char name[], char port[], int port_len)
+{
+    return MPI_ERR_INTERN;
+}
+
+static int pmi1_unpublish(const char name[])
+{
+    return MPI_ERR_INTERN;
+}
+
+#endif /* ENABLE_PMI1 */

@@ -1,0 +1,23 @@
+**ofi_provider_mismatch:OFI Provider name does not match configure-time provider name
+**ofi_provider_mismatch %s %d %s %s:OFI Provider name does not match configure-time provider name (%s:%d:%s:%s)
+**ofi_num_nics:OFI has a different number of nics available on different notes
+**ofi_num_nics %d %d:OFI has a different number of nics available on different notes (%d on this node and %d elsewhere)
+**ofi_max_conn:OFI dynamic process reaches maximum connection
+**ofi_max_conn %d:OFI dynamic process reaches maximum connection (%d)
+**ofi_no_prov:No valid libfabric provider
+**ofid_mr_key:OFI MR key invalid
+
+# Most of the libfabric call error names are generated from MPIDI_OFI_CALL macros,
+# some of them are explicitly used via MPIR_ERR_CHKANDJUMP4, they need be listed here.
+**ofid_cancel:OFI cancel failed
+**ofid_cancel %s %s:OFI cancel failed (default nic=%s: %s)
+**ofid_cntr_open:OFI Counter open failed
+**ofid_cntr_open %s %s:OFI OFI Counter open failed (default nic=%s: %s)
+**ofid_cntr_wait:OFI Counter wait failed
+**ofid_cntr_wait %s %s:OFI OFI Counter wait failed (default nic=%s: %s)
+**ofid_enable_trigger:OFI triggered ops enable failed
+**ofid_enable_trigger %s %s:OFI triggered ops enable failed (default nic=%s: %s)
+**ofid_issue_trigger:OFI triggered ops issue failed
+**ofid_issue_trigger %s %s:OFI triggered ops issue failed (default nic=%s: %s)
+**ofid_poll:OFI poll failed
+**ofid_poll %s %s:OFI poll failed (default nic=%s: %s)

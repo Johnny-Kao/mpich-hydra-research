@@ -1,0 +1,320 @@
+# vim: set ft=c:
+
+MPI_Alloc_mem:
+    .desc: Allocate memory for message passing and RMA
+    .error: MPI_ERR_NO_MEM
+{
+    void *ap = MPID_Alloc_mem(size, info_ptr);
+
+    /* --BEGIN ERROR HANDLING-- */
+    if (!ap) {
+        mpi_errno =
+            MPIR_Err_create_code(MPI_SUCCESS, MPIR_ERR_RECOVERABLE, __func__, __LINE__,
+                                 MPI_ERR_NO_MEM, "**allocmem", 0);
+        goto fn_fail;
+    }
+    /* --END ERROR HANDLING-- */
+
+    MPL_VG_MEM_INIT(ap, size);
+    *(void **) baseptr = ap;
+}
+
+MPI_Free_mem:
+    .desc: Free memory allocated with MPI_Alloc_mem
+    .skip: validate-base
+{ -- early_return --
+    if (base == NULL) {
+        goto fn_exit;
+    }
+}
+{
+    mpi_errno = MPID_Free_mem(base);
+    if (mpi_errno) {
+        goto fn_fail;
+    }
+}
+
+MPI_Accumulate:
+    .desc: Accumulate data into the target process using remote memory access
+    .skip: ThreadSafe
+    .seealso: MPI_Raccumulate
+    .impl: mpid
+    .earlyreturn: pt2pt_proc_null
+{ -- error_check --
+    MPI_Datatype origin_elem, target_elem;
+    MPIR_Datatype_get_basic_type(origin_datatype, origin_elem);
+    MPIR_Datatype_get_basic_type(target_datatype, target_elem);
+    if ((origin_count > 0 && origin_elem != MPI_DATATYPE_NULL) ||
+        (target_count > 0 && target_elem != MPI_DATATYPE_NULL)) {
+        MPIR_DATATYPE_REPLACE_BUILTIN(origin_elem);
+        MPIR_DATATYPE_REPLACE_BUILTIN(target_elem);
+        MPIR_ERR_CHKANDJUMP(origin_elem != target_elem, mpi_errno, MPI_ERR_TYPE,
+                            "**dtypemismatch");
+    }
+}
+
+MPI_Compare_and_swap:
+    .desc: Perform one-sided atomic compare-and-swap.
+    .skip: ThreadSafe, validate-DATATYPE
+    .impl: mpid
+    .earlyreturn: pt2pt_proc_null
+{ -- error_check --
+    MPIR_ERRTEST_DATATYPE(datatype, "datatype", mpi_errno);
+    /* Check if datatype is a C integer, Fortran Integer,
+     * logical, or byte, per the classes given on page 165. */
+    MPIR_ERRTEST_TYPE_RMA_ATOMIC(datatype, mpi_errno);
+}
+
+MPI_Fetch_and_op:
+    .desc: Perform one-sided read-modify-write.
+    .skip: ThreadSafe, validate-BUFFER
+    .seealso: MPI_Get_accumulate
+    .impl: mpid
+    .earlyreturn: pt2pt_proc_null
+    .error: MPI_ERR_OP
+{ -- error_check --
+    if (op != MPI_NO_OP) {
+        /* NOTE: when op is MPI_NO_OP, origin_addr is allowed to be NULL.
+         * In such case, MPI_Fetch_and_op equals to an atomic GET. */
+         MPIR_ERRTEST_ARGNULL(origin_addr, "origin_addr", mpi_errno);
+    }
+    MPIR_ERRTEST_ARGNULL(result_addr, "result_addr", mpi_errno);
+    if (!MPIR_DATATYPE_IS_PREDEFINED(datatype)) {
+        MPIR_ERR_SETANDJUMP(mpi_errno, MPI_ERR_TYPE, "**typenotpredefined");
+    }
+    if (!HANDLE_IS_BUILTIN(op)) {
+        MPIR_ERR_SETANDJUMP(mpi_errno, MPI_ERR_OP, "**opnotpredefined");
+    }
+}
+
+MPI_Get:
+    .desc: Get data from a memory window on a remote process
+    .seealso: MPI_Rget
+    .impl: mpid
+    .earlyreturn: pt2pt_proc_null
+
+MPI_Get_accumulate:
+    .desc: Perform an atomic, one-sided read-and-accumulate operation
+    .skip: ThreadSafe
+    .seealso: MPI_Rget_accumulate MPI_Fetch_and_op
+    .impl: mpid
+    .earlyreturn: pt2pt_proc_null
+
+MPI_Put:
+    .desc: Put data into a memory window on a remote process
+    .seealso: MPI_Rput
+    .impl: mpid
+    .earlyreturn: pt2pt_proc_null
+
+MPI_Raccumulate:
+    .desc: Accumulate data into the target process using remote memory access
+    .skip: ThreadSafe
+    .seealso: MPI_Accumulate
+    .impl: mpid
+    .earlyreturn: pt2pt_proc_null
+
+MPI_Rget:
+    .desc: Get data from a memory window on a remote process
+    .seealso: MPI_Get
+    .impl: mpid
+    .earlyreturn: pt2pt_proc_null
+
+MPI_Rget_accumulate:
+    .desc: Perform an atomic, one-sided read-and-accumulate
+    .skip: ThreadSafe
+    .seealso: MPI_Get_accumulate MPI_Fetch_and_op
+    .impl: mpid
+    .earlyreturn: pt2pt_proc_null
+
+MPI_Rput:
+    .desc: Put data into a memory window on a remote process and return a request
+    .seealso: MPI_Put
+    .impl: mpid
+    .earlyreturn: pt2pt_proc_null
+
+MPI_Win_allocate:
+    .desc: Create and allocate an MPI Window object for one-sided communication
+    .seealso: MPI_Win_allocate_shared MPI_Win_create MPI_Win_create_dynamic MPI_Win_free
+    .impl: mpid
+
+MPI_Win_allocate_shared:
+    .desc: Create an MPI Window object for one-sided communication and shared memory access, and allocate memory at each process
+    .seealso: MPI_Win_allocate MPI_Win_create MPI_Win_create_dynamic MPI_Win_free MPI_Win_shared_query
+    .impl: mpid
+
+MPI_Win_attach:
+    .desc: Attach memory to a dynamic window
+    .seealso: MPI_Win_create_dynamic MPI_Win_detach
+    .impl: mpid
+{ -- early_return --
+    if (size == 0)
+        goto fn_exit;
+}
+
+MPI_Win_complete:
+    .desc: Completes an RMA operations begun after an MPI_Win_start
+    .impl: mpid
+
+MPI_Win_create:
+    .desc: Create an MPI Window object for one-sided communication
+    .seealso: MPI_Win_allocate MPI_Win_allocate_shared MPI_Win_create_dynamic MPI_Win_free
+    .impl: mpid
+
+MPI_Win_create_dynamic:
+    .desc: Create an MPI Window object for one-sided communication
+    .seealso: MPI_Win_attach MPI_Win_detach MPI_Win_allocate MPI_Win_allocate_shared MPI_Win_create MPI_Win_free
+    .impl: mpid
+
+MPI_Win_detach:
+    .desc: Detach memory from a dynamic window
+    .seealso: MPI_Win_create_dynamic MPI_Win_attach
+    .impl: mpid
+{ -- early_return --
+    if (base == NULL)
+        goto fn_exit;
+}
+
+MPI_Win_fence:
+    .desc: Perform an MPI fence synchronization on a MPI window
+    .skip: validate-ASSERT
+    .impl: mpid
+    .error: MPI_ERR_ARG
+{ -- error_check --
+    CHECKMASK: assert, assert, MPI_MODE_NOSTORE MPI_MODE_NOPUT MPI_MODE_NOPRECEDE MPI_MODE_NOSUCCEED
+}
+
+MPI_Win_flush:
+    .desc: Complete all outstanding RMA operations at the given target
+    .seealso: MPI_Win_flush_all MPI_Win_flush_local MPI_Win_flush_local_all MPI_Win_lock MPI_Win_lock_all
+    .impl: mpid
+    .earlyreturn: pt2pt_proc_null
+
+MPI_Win_flush_all:
+    .desc: Complete all outstanding RMA operations at all targets
+    .seealso: MPI_Win_flush MPI_Win_flush_local MPI_Win_flush_local_all MPI_Win_lock MPI_Win_lock_all
+    .impl: mpid
+
+MPI_Win_flush_local:
+    .desc: Complete locally all outstanding RMA operations at the given target
+    .seealso: MPI_Win_flush MPI_Win_flush_all MPI_Win_flush_local_all MPI_Win_lock MPI_Win_lock_all
+    .impl: mpid
+    .earlyreturn: pt2pt_proc_null
+
+MPI_Win_flush_local_all:
+    .desc: Complete locally all outstanding RMA operations at all targets
+    .seealso: MPI_Win_flush MPI_Win_flush_all MPI_Win_flush_local MPI_Win_lock MPI_Win_lock_all
+    .impl: mpid
+
+MPI_Win_free:
+    .desc: Free an MPI RMA window
+{
+    if (MPIR_Process.attr_free && win_ptr->attributes) {
+        mpi_errno = MPIR_Process.attr_free(win_ptr->handle, &win_ptr->attributes);
+    }
+    /*
+     * If the user attribute free function returns an error,
+     * then do not free the window
+     */
+    if (mpi_errno != MPI_SUCCESS)
+        goto fn_fail;
+
+    /* We need to release the error handler */
+    if (win_ptr->errhandler && !(HANDLE_IS_BUILTIN(win_ptr->errhandler->handle))) {
+        mpi_errno = MPIR_Errhandler_free_impl(win_ptr->errhandler);
+        MPIR_ERR_CHECK(mpi_errno);
+    }
+
+    mpi_errno = MPID_Win_free(&win_ptr);
+    if (mpi_errno)
+        goto fn_fail;
+    *win = MPI_WIN_NULL;
+}
+
+MPI_Win_get_group:
+    .desc: Get the MPI Group of the window object
+{
+    MPIR_Group *group_ptr = NULL;
+    MPIR_Comm *win_comm_ptr = win_ptr->comm_ptr;
+    mpi_errno = MPIR_Comm_group_impl(win_comm_ptr, &group_ptr);
+    if (mpi_errno != MPI_SUCCESS)
+        goto fn_fail;
+    *group = group_ptr->handle;
+}
+
+MPI_Win_get_info:
+    .desc: Returns a new info object containing the hints of the window
+    .seealso: MPI_Win_set_info
+    .impl: mpid
+
+MPI_Win_get_name:
+    .desc: Get the print name associated with the MPI RMA window
+
+MPI_Win_lock:
+    .desc: Begin an RMA access epoch at the target process
+    .skip: validate-ASSERT, validate-LOCK_TYPE
+    .impl: mpid
+    .earlyreturn: pt2pt_proc_null
+{ -- error_check --
+    CHECKMASK: assert, assert, MPI_MODE_NOCHECK
+    CHECKENUM: lock_type, locktype, MPI_LOCK_SHARED MPI_LOCK_EXCLUSIVE
+}
+
+MPI_Win_lock_all:
+    .desc: Begin an RMA access epoch at all processes on the given window
+    .seealso: MPI_Win_unlock_all
+    .skip: validate-ASSERT
+    .impl: mpid
+{ -- error_check --
+    CHECKMASK: assert, assert, MPI_MODE_NOCHECK
+}
+
+MPI_Win_post:
+    .desc: Start an RMA exposure epoch
+    .skip: ThreadSafe, validate-ASSERT
+    .impl: mpid
+
+MPI_Win_set_info:
+    .desc: Set new values for the hints of the window associated with win
+    .seealso: MPI_Win_get_info
+    .impl: mpid
+
+MPI_Win_set_name:
+    .desc: Set the print name for an MPI RMA window
+
+MPI_Win_shared_query:
+    .desc: Query the size and base pointer for a patch of a shared memory window
+    .seealso: MPI_Win_allocate_shared
+    .poly_impl: use_aint
+
+MPI_Win_start:
+    .desc: Start an RMA access epoch for MPI
+    .impl: mpid
+    .skip: validate-ASSERT
+{ -- error_check --
+    CHECKMASK: assert, assert, MPI_MODE_NOCHECK
+}
+
+MPI_Win_sync:
+    .desc: Synchronize public and private copies of the given window
+    .seealso: MPI_Win_flush MPI_Win_flush_all MPI_Win_flush_local MPI_Win_flush_local_all
+    .impl: mpid
+
+MPI_Win_test:
+    .desc: Test whether an RMA exposure epoch has completed
+    .seealso: MPI_Win_wait, MPI_Win_post
+    .impl: mpid
+
+MPI_Win_unlock:
+    .desc: Completes an RMA access epoch at the target process
+    .seealso: MPI_Win_lock
+    .impl: mpid
+    .earlyreturn: pt2pt_proc_null
+
+MPI_Win_unlock_all:
+    .desc: Completes an RMA access epoch at all processes on the given window
+    .seealso: MPI_Win_lock_all
+    .impl: mpid
+
+MPI_Win_wait:
+    .desc: Completes an RMA exposure epoch begun with MPI_Win_post
+    .impl: mpid

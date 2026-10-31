@@ -1,0 +1,13 @@
+##
+## Copyright (C) by Argonne National Laboratory
+##     See COPYRIGHT in top-level directory
+##
+
+include $(top_srcdir)/Makefile_single.mtest
+
+
+# FIXME should "datatype" be included in this list?  It was not in the
+# simplemake version for some reason and is also missing from the testlist
+# file
+static_subdirs = attr coll comm datatype group pt2pt rma topo basic faults
+SUBDIRS = $(static_subdirs) $(iodir) $(otherlangs) $(spawndir)

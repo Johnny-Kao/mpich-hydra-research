@@ -1,0 +1,510 @@
+/*
+ * Copyright (C) by Argonne National Laboratory
+ *     See COPYRIGHT in top-level directory
+ */
+
+#include "mpi_fortimpl.h"
+#include <assert.h>
+#include <stdbool.h>
+
+#ifdef HAS_LIB_MPL
+#include "mpl.h"
+#else
+#define MPL_malloc(size, class)  malloc(size)
+#define MPL_free(p)              free(p)
+#endif
+
+#ifdef FORTRAN_CALL_PMPI
+#define MPI_Comm_create_keyval PMPI_Comm_create_keyval
+#define MPI_Win_create_keyval  PMPI_Win_create_keyval
+#define MPI_Type_create_keyval PMPI_Type_create_keyval
+#define MPI_Op_create          PMPI_Op_create
+#define MPI_Comm_create_errhandler    PMPI_Comm_create_errhandler
+#define MPI_Win_create_errhandler     PMPI_Win_create_errhandler
+#define MPI_File_create_errhandler    PMPI_File_create_errhandler
+#define MPI_Session_create_errhandler PMPI_Session_create_errhandler
+#define MPI_Grequest_start     PMPI_Grequest_start
+#endif
+
+/* ---- utility function ---- */
+static bool keyval_is_builtin(int keyval)
+{
+    if (MPI_TAG_UB == 0x64400001) {
+        /* MPICH ABI */
+        return ((unsigned int) keyval >> 30) == 1;
+    } else if (MPI_TAG_UB == 501) {
+        /* MPI ABI */
+        return (keyval >= 0 && keyval < 1024);
+    } else if (MPI_TAG_UB == 0) {
+        /* OMPI ABI */
+        return (keyval >= 0 && keyval <= 13);
+    } else {
+        return false;
+    }
+}
+
+/* without _as_fortran extension, attr interop between Fortran/C won't work,
+ * but at least make sure builtin attributes get should work.
+ */
+void MPII_Attr_convert_builtin(int keyval, void **val)
+{
+    if (keyval_is_builtin(keyval)) {
+        int *ptr = *val;
+        *val = (void *) (intptr_t) (*ptr);
+    }
+}
+
+/* ---- attr -----*/
+struct F77_attr_state {
+    int keyval;
+    F90_CopyFunction *copy_fn;
+    F90_DeleteFunction *delete_fn;
+    void *extra_state;
+};
+
+static int F77_attr_copy_proxy(int handle, int keyval, void *context,
+                               void *value_in, void *value_out, int *flag)
+{
+    struct F77_attr_state *p = (struct F77_attr_state *) context;
+
+    MPI_Fint ierr = 0;
+    MPI_Fint fhandle = handle;
+    MPI_Fint fkeyval = (MPI_Fint) keyval;
+    MPI_Aint fvalue = (MPI_Aint) value_in;
+    MPI_Aint *fextra = (MPI_Aint *) p->extra_state;
+    MPI_Aint fnew = 0;
+    MPI_Fint fflag = 0;
+
+    p->copy_fn(&fhandle, &fkeyval, fextra, &fvalue, &fnew, &fflag, &ierr);
+    *flag = MPII_FROM_FLOG(fflag);
+    *(void **) value_out = (void *) fnew;
+
+    return (int) ierr;
+}
+
+static int F77_attr_delete_proxy(int handle, int keyval, void *value, void *context)
+{
+    struct F77_attr_state *p = (struct F77_attr_state *) context;
+
+    MPI_Fint ierr = 0;
+    MPI_Fint fhandle = handle;
+    MPI_Fint fkeyval = (MPI_Fint) keyval;
+    MPI_Aint fvalue = (MPI_Aint) value;
+    MPI_Aint *fextra = (MPI_Aint *) p->extra_state;
+
+    p->delete_fn(&fhandle, &fkeyval, &fvalue, fextra, &ierr);
+    return (int) ierr;
+}
+
+#ifdef HAS_MPIX_CALLBACKS
+static void F77_keyval_free(void *extra_state)
+{
+    MPL_free(extra_state);
+}
+#endif
+
+static int F77_Comm_attr_copy_proxy(MPI_Comm comm, int keyval, void *context,
+                                    void *value_in, void *value_out, int *flag)
+{
+    int handle = MPI_Comm_toint(comm);
+    return F77_attr_copy_proxy(handle, keyval, context, value_in, value_out, flag);
+}
+
+static int F77_Comm_attr_delete_proxy(MPI_Comm comm, int keyval, void *value, void *context)
+{
+    int handle = MPI_Comm_toint(comm);
+    return F77_attr_delete_proxy(handle, keyval, value, context);
+}
+
+static int F77_Win_attr_copy_proxy(MPI_Win win, int keyval, void *context,
+                                   void *value_in, void *value_out, int *flag)
+{
+    int handle = MPI_Win_toint(win);
+    return F77_attr_copy_proxy(handle, keyval, context, value_in, value_out, flag);
+}
+
+static int F77_Win_attr_delete_proxy(MPI_Win win, int keyval, void *value, void *context)
+{
+    int handle = MPI_Win_toint(win);
+    return F77_attr_delete_proxy(handle, keyval, value, context);
+}
+
+static int F77_Type_attr_copy_proxy(MPI_Datatype datatype, int keyval, void *context,
+                                    void *value_in, void *value_out, int *flag)
+{
+    int handle = MPI_Type_toint(datatype);
+    return F77_attr_copy_proxy(handle, keyval, context, value_in, value_out, flag);
+}
+
+static int F77_Type_attr_delete_proxy(MPI_Datatype datatype, int keyval, void *value, void *context)
+{
+    int handle = MPI_Type_toint(datatype);
+    return F77_attr_delete_proxy(handle, keyval, value, context);
+}
+
+int MPII_Keyval_create(F90_CopyFunction copy_fn, F90_DeleteFunction delete_fn, int *keyval_out,
+                       void *extra_state, enum F77_handle_type type)
+{
+    struct F77_attr_state *p = MPL_malloc(sizeof(struct F77_attr_state), MPL_MEM_OTHER);
+    p->copy_fn = copy_fn;
+    p->delete_fn = delete_fn;
+    p->extra_state = extra_state;
+
+    int mpi_errno = MPI_SUCCESS;
+#ifdef HAS_MPIX_CALLBACKS
+    switch (type) {
+        case F77_COMM:
+            mpi_errno = MPIX_Comm_create_keyval_x(F77_Comm_attr_copy_proxy,
+                                                  F77_Comm_attr_delete_proxy,
+                                                  F77_keyval_free, keyval_out, p);
+            break;
+        case F77_WIN:
+            mpi_errno = MPIX_Win_create_keyval_x(F77_Win_attr_copy_proxy,
+                                                 F77_Win_attr_delete_proxy,
+                                                 F77_keyval_free, keyval_out, p);
+            break;
+        case F77_DATATYPE:
+            mpi_errno = MPIX_Type_create_keyval_x(F77_Type_attr_copy_proxy,
+                                                  F77_Type_attr_delete_proxy,
+                                                  F77_keyval_free, keyval_out, p);
+            break;
+        default:
+            assert(0);
+    }
+#else
+    /* Without MPIX extension, we can't set F77_keyval_free, thus will leak F77_attr_state */
+    switch (type) {
+        case F77_COMM:
+            mpi_errno = MPI_Comm_create_keyval(F77_Comm_attr_copy_proxy,
+                                               F77_Comm_attr_delete_proxy, keyval_out, p);
+            break;
+        case F77_WIN:
+            mpi_errno = MPI_Win_create_keyval(F77_Win_attr_copy_proxy,
+                                              F77_Win_attr_delete_proxy, keyval_out, p);
+            break;
+        case F77_DATATYPE:
+            mpi_errno = MPI_Type_create_keyval(F77_Type_attr_copy_proxy,
+                                               F77_Type_attr_delete_proxy, keyval_out, p);
+            break;
+        default:
+            assert(0);
+    }
+#endif
+
+    if (mpi_errno == MPI_SUCCESS) {
+        p->keyval = *keyval_out;
+    } else {
+        MPL_free(p);
+    }
+
+    return mpi_errno;
+}
+
+/* For use by MPI_F08 */
+int MPII_Comm_create_keyval(F90_CopyFunction copy_fn, F90_DeleteFunction delete_fn,
+                            int *keyval_out, void *extra_state)
+{
+    return MPII_Keyval_create(copy_fn, delete_fn, keyval_out, extra_state, F77_COMM);
+}
+
+int MPII_Win_create_keyval(F90_CopyFunction copy_fn, F90_DeleteFunction delete_fn,
+                           int *keyval_out, void *extra_state)
+{
+    return MPII_Keyval_create(copy_fn, delete_fn, keyval_out, extra_state, F77_WIN);
+}
+
+int MPII_Type_create_keyval(F90_CopyFunction copy_fn, F90_DeleteFunction delete_fn,
+                            int *keyval_out, void *extra_state)
+{
+    return MPII_Keyval_create(copy_fn, delete_fn, keyval_out, extra_state, F77_DATATYPE);
+}
+
+/* ---- user op ----------------- */
+#ifdef HAS_MPIX_CALLBACKS
+struct F77_op_state {
+    F77_OpFunction *opfn;
+};
+
+static void F77_op_proxy(void *invec, void *inoutvec, MPI_Count len, MPI_Datatype datatype,
+                         void *extra_state)
+{
+    struct F77_op_state *p = extra_state;
+    MPI_Fint len_i = (MPI_Fint) len;
+    MPI_Fint datatype_i = MPI_Type_toint(datatype);
+
+    p->opfn(invec, inoutvec, &len_i, &datatype_i);
+}
+
+static void F77_op_free(void *extra_state)
+{
+    MPL_free(extra_state);
+}
+
+#endif
+
+int MPII_op_create(F77_OpFunction * opfn, MPI_Fint commute, MPI_Fint * op)
+{
+    MPI_Op op_i;
+#ifdef HAS_MPIX_CALLBACKS
+    struct F77_op_state *p = MPL_malloc(sizeof(struct F77_op_state), MPL_MEM_OTHER);
+    p->opfn = opfn;
+
+    int ret = MPIX_Op_create_x(F77_op_proxy, F77_op_free, commute, p, &op_i);
+#else
+    /* MPI will call opfn directly, the datatype argument likely won't work */
+    int ret = MPI_Op_create((MPI_User_function *) opfn, commute, &op_i);
+#endif
+    if (ret == MPI_SUCCESS) {
+        *op = MPI_Op_toint(op_i);
+    } else {
+#ifdef HAS_MPIX_CALLBACKS
+        MPL_free(p);
+#endif
+    }
+
+    return ret;
+}
+
+/* ---- user errhandler  ----------------- */
+#ifdef HAS_MPIX_CALLBACKS
+struct F77_errhan_state {
+    F77_ErrFunction *err_fn;
+};
+
+static void F77_comm_errhan_proxy(MPI_Comm comm, int error_code, void *extra_state)
+{
+    struct F77_errhan_state *p = extra_state;
+    MPI_Fint comm_i = MPI_Comm_toint(comm);
+    MPI_Fint error_code_i = error_code;
+
+    p->err_fn(&comm_i, &error_code_i);
+}
+
+static void F77_win_errhan_proxy(MPI_Win win, int error_code, void *extra_state)
+{
+    struct F77_errhan_state *p = extra_state;
+    MPI_Fint win_i = MPI_Win_toint(win);
+    MPI_Fint error_code_i = error_code;
+
+    p->err_fn(&win_i, &error_code_i);
+}
+
+static void F77_file_errhan_proxy(MPI_File file, int error_code, void *extra_state)
+{
+    struct F77_errhan_state *p = extra_state;
+    MPI_Fint file_i = MPI_File_toint(file);
+    MPI_Fint error_code_i = error_code;
+
+    p->err_fn(&file_i, &error_code_i);
+}
+
+static void F77_session_errhan_proxy(MPI_Session session, int error_code, void *extra_state)
+{
+    struct F77_errhan_state *p = extra_state;
+    MPI_Fint session_i = MPI_Session_toint(session);
+    MPI_Fint error_code_i = error_code;
+
+    p->err_fn(&session_i, &error_code_i);
+}
+
+static void F77_errhan_free(void *extra_state)
+{
+    MPL_free(extra_state);
+}
+
+#endif
+
+int MPII_errhan_create(F77_ErrFunction * err_fn, MPI_Fint * errhandler, enum F77_handle_type type)
+{
+    MPI_Errhandler errhandler_i;
+    int ret = MPI_SUCCESS;
+
+#ifdef HAS_MPIX_CALLBACKS
+    struct F77_errhan_state *p = MPL_malloc(sizeof(struct F77_errhan_state), MPL_MEM_OTHER);
+    p->err_fn = err_fn;
+    switch (type) {
+        case F77_COMM:
+            ret = MPIX_Comm_create_errhandler_x(F77_comm_errhan_proxy, F77_errhan_free,
+                                                p, &errhandler_i);
+            break;
+        case F77_WIN:
+            ret = MPIX_Win_create_errhandler_x(F77_win_errhan_proxy, F77_errhan_free,
+                                               p, &errhandler_i);
+            break;
+        case F77_FILE:
+            ret = MPIX_File_create_errhandler_x(F77_file_errhan_proxy, F77_errhan_free,
+                                                p, &errhandler_i);
+            break;
+        case F77_SESSION:
+            ret = MPIX_Session_create_errhandler_x(F77_session_errhan_proxy, F77_errhan_free,
+                                                   p, &errhandler_i);
+            break;
+        default:
+            assert(0);
+    }
+#else
+    /* MPI will call err_fn directly, the comm/win/file/sessioin argument likely won't work */
+    switch (type) {
+        case F77_COMM:
+            ret = MPI_Comm_create_errhandler((MPI_Comm_errhandler_function *) err_fn,
+                                             &errhandler_i);
+            break;
+        case F77_WIN:
+            ret = MPI_Win_create_errhandler((MPI_Win_errhandler_function *) err_fn, &errhandler_i);
+            break;
+        case F77_FILE:
+            ret = MPI_File_create_errhandler((MPI_File_errhandler_function *) err_fn,
+                                             &errhandler_i);
+            break;
+        case F77_SESSION:
+            ret = MPI_Session_create_errhandler((MPI_Session_errhandler_function *) err_fn,
+                                                &errhandler_i);
+            break;
+        default:
+            assert(0);
+    }
+#endif
+    if (ret == MPI_SUCCESS) {
+        *errhandler = MPI_Errhandler_toint(errhandler_i);
+    } else {
+#ifdef HAS_MPIX_CALLBACKS
+        MPL_free(p);
+#endif
+    }
+
+    return ret;
+}
+
+/* For use by MPI_F08 */
+int MPII_Comm_create_errhandler(F77_ErrFunction * err_fn, MPI_Fint * errhandler)
+{
+    return MPII_errhan_create(err_fn, errhandler, F77_COMM);
+}
+
+int MPII_File_create_errhandler(F77_ErrFunction * err_fn, MPI_Fint * errhandler)
+{
+    return MPII_errhan_create(err_fn, errhandler, F77_FILE);
+}
+
+int MPII_Win_create_errhandler(F77_ErrFunction * err_fn, MPI_Fint * errhandler)
+{
+    return MPII_errhan_create(err_fn, errhandler, F77_WIN);
+}
+
+int MPII_Session_create_errhandler(F77_ErrFunction * err_fn, MPI_Fint * errhandler)
+{
+    return MPII_errhan_create(err_fn, errhandler, F77_SESSION);
+}
+
+/* ---- generalized request ----------------- */
+struct F77_greq_state {
+    F77_greq_cancel_function *cancel_fn;
+    F77_greq_free_function *free_fn;
+    union {
+        F77_greq_query_function *f77_query_fn;
+        F08_greq_query_function *f08_query_fn;
+    } u;
+    void *extra_state;
+};
+
+static int F77_greq_cancel_proxy(void *extra_state, int complete)
+{
+    struct F77_greq_state *p = extra_state;
+
+    MPI_Fint ierr;
+    MPI_Fint complete_i = complete;
+    p->cancel_fn(p->extra_state, &complete_i, &ierr);
+
+    return ierr;
+}
+
+static int F77_greq_free_proxy(void *extra_state)
+{
+    struct F77_greq_state *p = extra_state;
+
+    MPI_Fint ierr;
+    p->free_fn(p->extra_state, &ierr);
+
+    MPL_free(p);
+
+    return ierr;
+}
+
+static int F77_greq_query_proxy(void *extra_state, MPI_Status * status)
+{
+    struct F77_greq_state *p = extra_state;
+
+    MPI_Fint ierr;
+    if (status == MPI_STATUS_IGNORE) {
+        p->u.f77_query_fn(p->extra_state, MPI_F_STATUS_IGNORE, &ierr);
+    } else {
+#ifdef HAVE_FINT_IS_INT
+        MPI_Fint *status_p = (void *) status;
+        p->u.f77_query_fn(p->extra_state, status_p, &ierr);
+#else
+        MPI_Fint status_i[MPI_F_STATUS_SIZE];
+        p->u.f77_query_fn(p->extra_state, status_i, &ierr);
+
+        ierr = MPIR_Status_f2c_impl(status_i, status);
+#endif
+    }
+
+    return ierr;
+}
+
+static int F08_greq_query_proxy(void *extra_state, MPI_Status * status)
+{
+    struct F77_greq_state *p = extra_state;
+
+    MPI_Fint ierr;
+    if (status == MPI_STATUS_IGNORE) {
+        p->u.f08_query_fn(p->extra_state, MPI_F08_STATUS_IGNORE, &ierr);
+    } else {
+        MPI_F08_status status_i;
+        p->u.f08_query_fn(p->extra_state, &status_i, &ierr);
+
+        ierr = MPIR_Status_f082c_impl(&status_i, status);
+    }
+
+    return ierr;
+}
+
+int MPII_greq_start(F77_greq_query_function query_fn, F77_greq_free_function free_fn,
+                    F77_greq_cancel_function cancel_fn, void *extra_state, MPI_Fint * request)
+{
+    struct F77_greq_state *p = MPL_malloc(sizeof(struct F77_greq_state), MPL_MEM_OTHER);
+    p->u.f77_query_fn = query_fn;
+    p->free_fn = free_fn;
+    p->cancel_fn = cancel_fn;
+    p->extra_state = extra_state;
+
+    int mpi_errno;
+    MPI_Request req_i;
+    mpi_errno = MPI_Grequest_start(F77_greq_query_proxy, F77_greq_free_proxy, F77_greq_cancel_proxy,
+                                   p, &req_i);
+    if (mpi_errno == MPI_SUCCESS) {
+        *request = MPI_Request_toint(req_i);
+    }
+
+    return mpi_errno;
+}
+
+int MPII_greq_start_f08(F08_greq_query_function query_fn, F77_greq_free_function free_fn,
+                        F77_greq_cancel_function cancel_fn, void *extra_state, MPI_Fint * request)
+{
+    struct F77_greq_state *p = MPL_malloc(sizeof(struct F77_greq_state), MPL_MEM_OTHER);
+    p->u.f08_query_fn = query_fn;
+    p->free_fn = free_fn;
+    p->cancel_fn = cancel_fn;
+    p->extra_state = extra_state;
+
+    int mpi_errno;
+    MPI_Request req_i;
+    mpi_errno = MPI_Grequest_start(F08_greq_query_proxy, F77_greq_free_proxy, F77_greq_cancel_proxy,
+                                   p, &req_i);
+    if (mpi_errno == MPI_SUCCESS) {
+        *request = MPI_Request_toint(req_i);
+    }
+
+    return mpi_errno;
+}

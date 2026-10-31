@@ -1,0 +1,436 @@
+/*
+ * Copyright (C) by Argonne National Laboratory
+ *     See COPYRIGHT in top-level directory
+ */
+
+#ifndef OFI_PRE_H_INCLUDED
+#define OFI_PRE_H_INCLUDED
+
+#include <rdma/fabric.h>
+#include <rdma/fi_endpoint.h>
+#include <rdma/fi_domain.h>
+#include <rdma/fi_tagged.h>
+#include <rdma/fi_rma.h>
+#include <rdma/fi_atomic.h>
+#include <rdma/fi_cm.h>
+#include <rdma/fi_errno.h>
+#include <rdma/fi_trigger.h>
+#include "ofi_capability_sets.h"
+
+/* Defines */
+
+/* configure option --enable-ofi-domain */
+#ifndef MPIDI_OFI_VNI_USE_DOMAIN
+#define MPIDI_OFI_VNI_USE_SEPCTX       1
+#endif
+
+/* Under strict alignment, the am header is padded so the payload that follows it starts at a
+ * MAX_ALIGNMENT offset from the message start. MPIDI_OFI_AM_PADDING_SZ(offset) is the padding
+ * needed after a message prefix of size offset. MPIDI_OFI_MAX_AM_HDR_SIZE is the largest am
+ * header whose padded size still fits in MPIDI_OFI_am_header_t::am_hdr_sz. */
+#ifdef NEEDS_STRICT_ALIGNMENT
+#define MPIDI_OFI_AM_PADDING_SZ(offset) \
+    ((MPI_Aint) (MPL_ROUND_UP_ALIGN(offset, MAX_ALIGNMENT) - (offset)))
+#define MPIDI_OFI_MAX_AM_HDR_SIZE \
+    ((int) (MPL_ROUND_DOWN_ALIGN(sizeof(MPIDI_OFI_am_header_t) + \
+                                 (1 << MPIDI_OFI_AM_HDR_SZ_BITS) - 1, MAX_ALIGNMENT) - \
+            sizeof(MPIDI_OFI_am_header_t)))
+#else
+#define MPIDI_OFI_AM_PADDING_SZ(offset) 0
+#define MPIDI_OFI_MAX_AM_HDR_SIZE      ((1 << MPIDI_OFI_AM_HDR_SZ_BITS) - 1)
+#endif
+#define MPIDI_OFI_AM_HANDLER_ID_BITS   8
+#define MPIDI_OFI_AM_TYPE_BITS         8
+#define MPIDI_OFI_AM_HDR_SZ_BITS       8
+#define MPIDI_OFI_AM_PAYLOAD_SZ_BITS  24
+#define MPIDI_OFI_AM_RANK_BITS        32
+#define MPIDI_OFI_AM_MSG_HEADER_SIZE (sizeof(MPIDI_OFI_am_header_t))
+
+/* Typedefs */
+
+struct MPIR_Comm;
+struct MPIR_Request;
+
+typedef struct {
+    int dummy;
+} MPIDI_OFI_Global_t;
+
+typedef struct {
+    /* support for connection */
+    int conn_id;
+    int enable_striping;        /* Flag to enable striping per communicator. */
+    int enable_hashing;         /* Flag to enable hashing per communicator. */
+    int *pref_nic;              /* Array to specify the preferred NIC for each rank (if needed) */
+} MPIDI_OFI_comm_t;
+enum {
+    MPIDI_AMTYPE_NONE = 0,
+    MPIDI_AMTYPE_SHORT_HDR,
+    MPIDI_AMTYPE_SHORT,
+    MPIDI_AMTYPE_PIPELINE,
+    MPIDI_AMTYPE_RDMA_READ
+};
+
+typedef enum {
+    MPIDI_OFI_DEFERRED_AM_OP__ISEND_PIPELINE,
+    MPIDI_OFI_DEFERRED_AM_OP__ISEND_RDMA_READ
+} MPIDI_OFI_deferred_am_op_e;
+
+typedef struct {
+    /* context id and src rank so the target side can
+     * issue RDMA read operation */
+    int context_id;
+    int src_rank;
+
+    uint64_t src_offset;
+    MPIR_Request *sreq_ptr;
+    uint64_t am_hdr_src;
+    uint64_t rma_key;
+    MPI_Aint reg_sz;
+} MPIDI_OFI_lmt_msg_payload_t;
+
+typedef struct {
+    MPIR_Request *sreq_ptr;
+} MPIDI_OFI_am_rdma_read_ack_msg_t;
+
+typedef struct MPIDI_OFI_am_header_t {
+    uint64_t handler_id:MPIDI_OFI_AM_HANDLER_ID_BITS;
+    uint64_t am_type:MPIDI_OFI_AM_TYPE_BITS;
+    uint64_t am_hdr_sz:MPIDI_OFI_AM_HDR_SZ_BITS;
+    uint64_t payload_sz:MPIDI_OFI_AM_PAYLOAD_SZ_BITS;   /* data size on this OFI message. This
+                                                         * could be the size of a pipeline segment
+                                                         * */
+    /* vcis are needed for callbacks and to reply.
+     * Note: technically the vci_dst don't need be transported since the receiver
+     * always know which vci it receives the message. However, having both of them
+     * in the header makes the design symmetric and thus easier to maintain.
+     */
+    uint8_t vci_src;
+    uint8_t vci_dst;
+    uint16_t seqno;             /* Sequence number of this message. Number is unique between
+                                 * (src_rank, src_vci) and (dst_rank, dst_vci) */
+    uint64_t src_id;            /* needed for destination to track seqno, combines
+                                 * communicator context_id, rank, and vci */
+} MPIDI_OFI_am_header_t;
+
+/* Represents early-arrived active messages.
+ * Queued to MPIDI_OFI_global.am_unordered_msgs */
+typedef struct MPIDI_OFI_am_unordered_msg {
+    struct MPIDI_OFI_am_unordered_msg *next;
+    struct MPIDI_OFI_am_unordered_msg *prev;
+    MPIDI_OFI_am_header_t am_hdr;
+    /* This is used as a variable-length structure.
+     * Additional memory region may follow. */
+} MPIDI_OFI_am_unordered_msg_t;
+
+typedef struct {
+    MPIDI_OFI_am_header_t hdr;
+    MPIDI_OFI_lmt_msg_payload_t pyld;
+} MPIDI_OFI_lmt_msg_t;
+
+typedef struct {
+    uint64_t rma_key;
+    void *unpack_buffer;
+    MPI_Aint pack_size;
+    uint64_t src_offset;
+    int context_id;
+    int src_rank;
+} MPIDI_OFI_lmt_unpack_t;
+
+typedef enum {
+    MPIDI_OFI_AM_LMT_IOV,
+    MPIDI_OFI_AM_LMT_UNPACK
+} MPIDI_OFI_lmt_type_t;
+
+typedef struct {
+    struct fid_mr *lmt_mr;
+    MPIDI_OFI_lmt_type_t lmt_type;
+    union {
+        uint64_t lmt_cntr;
+        MPIDI_OFI_lmt_unpack_t unpack;
+    } lmt_u;
+    MPIR_Request *rreq_ptr;
+    void *am_hdr;
+    /* used for packing non-contig data or the whole am message when payload doesn't fit */
+    void *pack_buffer;
+    /* FI_ASYNC_IOV requires an iov storage to be alive until a request completes */
+    struct iovec iov[3];
+    /* AM send buffers, must be together so we can send without sendv.
+     * Note: since we allocate from genq pool, there may be some additional space
+     * to pack a small payload */
+    MPIDI_OFI_am_header_t msg_hdr MPL_ATTR_ALIGNED(MAX_ALIGNMENT);
+    uint8_t am_hdr_buf[MPIDI_OFI_MAX_AM_HDR_SIZE];
+} MPIDI_OFI_am_request_header_t;
+
+#define MPIDI_OFI_AM_HDR_POOL_CELL_SIZE             (1024)
+#define MPIDI_OFI_AM_HDR_POOL_NUM_CELLS_PER_CHUNK   (1024)
+/* maximum am message size that can fit into request header buffer */
+#define MPIDI_OFI_AM_MAX_MSG_SIZE \
+    (MPIDI_OFI_AM_HDR_POOL_CELL_SIZE - offsetof(MPIDI_OFI_am_request_header_t, msg_hdr))
+
+typedef struct MPIDI_OFI_deferred_am_isend_req {
+    int op;
+    int rank;
+    MPIR_Comm *comm;
+    int handler_id;
+    const void *buf;
+    size_t count;
+    MPI_Datatype datatype;
+    MPIR_Request *sreq;
+    size_t am_hdr_sz;
+    bool need_packing;
+    MPI_Aint data_sz;
+    int vci_src;
+    int vci_dst;
+
+    struct MPIDI_OFI_deferred_am_isend_req *prev;
+    struct MPIDI_OFI_deferred_am_isend_req *next;
+} MPIDI_OFI_deferred_am_isend_req_t;
+
+typedef struct {
+    struct fi_context context[MPIDI_OFI_CONTEXT_STRUCTS];       /* fixed field, do not move */
+    int event_id;               /* fixed field, do not move */
+    MPIDI_OFI_am_request_header_t *sreq_hdr;
+    MPIDI_OFI_am_request_header_t *rreq_hdr;
+    MPIDI_OFI_deferred_am_isend_req_t *deferred_req;    /* saving information when an AM isend is
+                                                         * deferred */
+    uint8_t am_type_choice;     /* save amtype to avoid double checking */
+    MPI_Aint data_sz;           /* save data_sz to avoid double checking */
+} MPIDI_OFI_am_request_t;
+
+
+/* define common fields for the next 3 structs and common macros used to initialize these fields.
+ * These macros are "fragile" but they are not supposed to be used anywhere with ignorance.
+ * note: the missing semicolon on the last line is intentional.
+ */
+
+#define MPIDI_OFI_RNDV_COMMON_FIELDS \
+    const void *buf; \
+    MPI_Aint count; \
+    MPI_Datatype datatype; \
+    /* cached fields */ \
+    bool need_pack; \
+    MPL_pointer_attr_t attr; \
+    MPI_Aint data_sz; \
+    MPI_Aint remote_data_sz; \
+    /* send/recv fields */ \
+    int vci_local; \
+    int vci_remote; \
+    struct MPIDI_av_entry *av; \
+    uint64_t match_bits; \
+    /* only needed for sender to am_tag_send or replying probe */ \
+    int remote_rank
+
+typedef struct {
+    MPIDI_OFI_RNDV_COMMON_FIELDS;
+} MPIDI_OFI_rndv_common_t;
+
+struct send_chunk;
+typedef struct {
+    MPIDI_OFI_RNDV_COMMON_FIELDS;
+    union {
+        struct {
+            MPI_Aint copy_offset;
+            int copy_infly;
+            int send_infly;
+            struct send_chunk *chunk_head;
+            struct send_chunk *chunk_tail;
+        } send;
+        struct {
+            MPI_Aint recv_offset;
+            int recv_infly;
+        } recv;
+    } u;
+    int chunk_index;
+    MPI_Aint remain_sz;
+} MPIDI_OFI_pipeline_t;
+
+typedef struct {
+    MPIDI_OFI_RNDV_COMMON_FIELDS;
+    MPI_Aint sz_per_nic;
+    union {
+        struct {
+            const void *data;
+            struct fid_mr **mrs;
+        } send;
+        struct {
+            union {
+                void *data;     /* !need_pack */
+                int copy_infly; /*  need_pack */
+            } u;
+            uint64_t remote_base;
+            uint64_t *rkeys;
+            MPI_Aint chunks_per_nic;
+            MPI_Aint cur_chunk_index;
+            int num_infly;
+            bool all_issued;
+        } recv;
+    } u;
+} MPIDI_OFI_rndvread_t;
+
+typedef struct {
+    MPIDI_OFI_RNDV_COMMON_FIELDS;
+    MPI_Aint sz_per_nic;
+    union {
+        struct {
+            union {
+                void *data;     /* !need_pack */
+                int copy_infly; /*  need_pack */
+            } u;
+            uint64_t remote_base;
+            uint64_t *rkeys;
+            MPI_Aint chunks_per_nic;
+            MPI_Aint cur_chunk_index;
+            int write_infly;
+            MPI_Aint chunks_remain;
+        } send;
+        struct {
+            const void *data;
+            struct fid_mr **mrs;
+        } recv;
+    } u;
+} MPIDI_OFI_rndvwrite_t;
+
+enum MPIDI_OFI_req_kind {
+    MPIDI_OFI_req_kind__any,
+    MPIDI_OFI_req_kind__probe,
+    MPIDI_OFI_req_kind__mprobe,
+};
+
+typedef struct {
+    struct fi_context context[MPIDI_OFI_CONTEXT_STRUCTS];       /* fixed field, do not move */
+    int event_id;               /* fixed field, do not move */
+    int nic_num;                /* Store the nic number so we can use it to cancel a request later
+                                 * if needed. */
+    /* for am_tag_send and am_tag_recv */
+    int am_handler_id;
+    MPIR_Request *am_req;
+
+    /* always save these in case we need switch to am */
+    void *buf;
+    size_t count;
+    MPI_Datatype datatype;
+
+    /* for recv request */
+    MPL_atomic_int_t peek_status;
+    int context_id;
+    int vci_local;
+    int vci_remote;
+
+    enum MPIDI_OFI_req_kind kind;
+    union {
+        struct {
+            char *pack_buffer;
+            bool use_pipeline_pool;
+        } pack;
+        struct {
+            struct iovec *iovs;
+        } nopack;
+    } noncontig;
+    struct fid_mr *mr;
+    union {
+        struct iovec iov;
+        void *inject_buf;       /* Internal buffer for inject emulation */
+    } util;
+} MPIDI_OFI_direct_t;
+
+typedef union {
+    MPIDI_OFI_direct_t direct;
+    MPIDI_OFI_rndv_common_t common;
+    MPIDI_OFI_pipeline_t pipeline;
+    MPIDI_OFI_rndvread_t read;
+    MPIDI_OFI_rndvwrite_t write;
+} MPIDI_OFI_request_t;
+
+#define MPIDI_OFI_AMREQ_COMMON(req)   ((req)->dev.ch4.netmod.ofi.common)
+#define MPIDI_OFI_AMREQ_PIPELINE(req) ((req)->dev.ch4.netmod.ofi.pipeline)
+#define MPIDI_OFI_AMREQ_READ(req)     ((req)->dev.ch4.netmod.ofi.read)
+#define MPIDI_OFI_AMREQ_WRITE(req)    ((req)->dev.ch4.netmod.ofi.write)
+
+typedef struct {
+    int index;
+} MPIDI_OFI_dt_t;
+
+typedef struct {
+    int dummy;
+} MPIDI_OFI_op_t;
+
+typedef struct {
+    int dummy;
+} MPIDI_OFI_part_t;
+
+struct MPIDI_OFI_win_request;
+struct MPIDI_OFI_win_hint;
+
+/* Stores per-rank information for RMA */
+typedef struct {
+    int32_t disp_unit;
+    /* For MR_BASIC mode we need to store an MR key and a base address of the target window */
+    /* TODO - Ideally, we'd like to not have these fields compiled in if not
+     * using MR_BASIC. In practice, doing so makes the code very complex
+     * elsewhere for very little payoff. */
+    uint64_t mr_key;
+    uintptr_t base;
+} MPIDI_OFI_win_targetinfo_t;
+
+/* Queue for storing pending memory registration handles, to be cleared at epoch synch */
+typedef struct MPIDI_OFI_mr_queue_t {
+    void *mr;
+    struct MPIDI_OFI_mr_queue_t *next;
+} MPIDI_OFI_mr_queue_t;
+
+typedef struct {
+    struct fid_mr *mr;
+    uint64_t mr_key;
+    struct fid_ep *ep;          /* EP with counter & completion */
+    int sep_tx_idx;             /* transmit context index for scalable EP,
+                                 * -1 means using non scalable EP. */
+#if defined(MPIDI_CH4_USE_MT_RUNTIME) || defined(MPIDI_CH4_USE_MT_LOCKLESS)
+    MPL_atomic_uint64_t *issued_cntr;   /* atomic counter in support of lockless and runtime mt models */
+#else
+    uint64_t *issued_cntr;
+#endif
+#if defined(MPIDI_CH4_USE_MT_RUNTIME) || defined(MPIDI_CH4_USE_MT_LOCKLESS)
+    MPL_atomic_uint64_t issued_cntr_v;  /* atomic counter in support of lockless and runtime mt models */
+#else
+    uint64_t issued_cntr_v;     /* main body of an issued counter,
+                                 * if we are to use per-window counter */
+#endif
+
+    struct fid_cntr *cmpl_cntr;
+    uint64_t win_id;
+    struct MPIDI_OFI_win_request *syncQ;
+    struct MPIDI_OFI_win_request *deferredQ;
+    MPIDI_OFI_win_targetinfo_t *winfo;
+    struct {
+        MPIDI_OFI_mr_queue_t *head;
+        MPIDI_OFI_mr_queue_t *tail;
+    } pending_mr_queue;
+
+    MPL_gavl_tree_t *dwin_target_mrs;   /* MR key and address pairs registered to remote processes.
+                                         * One AVL tree per process. */
+    MPL_gavl_tree_t dwin_mrs;   /* Single AVL tree to store locally attached MRs */
+
+    /* Accumulate related info. The struct internally allocate the max_count array indexed by
+     * fi_datatype. The struct size is unknown when we load ofi_pre.h, thus we only set a pointer here. */
+    struct MPIDI_OFI_win_acc_hint *acc_hint;
+
+    /* Counter to track whether or not to kick the progress engine when the OFI provider does not
+     * supply automatic progress. This can make a big performance difference when doing
+     * large, non-contiguous RMA operations. */
+    int progress_counter;
+} MPIDI_OFI_win_t;
+
+/* Maximum number of network interfaces CH4 can support. */
+#define MPIDI_OFI_MAX_NICS 128
+
+/* Imagine a dimension of [local_vci][local_nic][rank][vci][nic] -
+ * all local endpoints will share the same remote address due to the same insertion order
+ * and use of FI_AV_TABLE except the local root endpoint.
+ */
+typedef struct {
+    fi_addr_t root_dest;        /* [0][0][r][0][0] */
+    fi_addr_t root_offset;      /* [0][0][r][vci][nic] - [*][*][r][vci][nic] */
+    fi_addr_t *all_dest;        /* [*][*][r][vci][nic] */
+} MPIDI_OFI_addr_t;
+
+#endif /* OFI_PRE_H_INCLUDED */

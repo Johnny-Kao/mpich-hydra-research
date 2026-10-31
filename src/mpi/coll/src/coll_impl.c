@@ -1,0 +1,400 @@
+/*
+ * Copyright (C) by Argonne National Laboratory
+ *     See COPYRIGHT in top-level directory
+ */
+
+#include "mpiimpl.h"
+#include "coll_impl.h"
+#include "circ_graph.h"
+#include "coll_csel.h"
+
+/*
+=== BEGIN_MPI_T_CVAR_INFO_BLOCK ===
+
+categories :
+   - name : COLLECTIVE
+     description : A category for collective communication variables.
+
+cvars:
+    - name        : MPIR_CVAR_COLLECTIVE_FALLBACK
+      category    : COLLECTIVE
+      type        : enum
+      default     : silent
+      class       : none
+      verbosity   : MPI_T_VERBOSITY_USER_BASIC
+      scope       : MPI_T_SCOPE_ALL_EQ
+      description : |-
+        Variable to control what the MPI library should do if the
+        user-specified collective algorithm does not work for the
+        arguments passed in by the user. Calls on internal
+        sub-communicators (e.g. the node communicators of a
+        compositional algorithm) always fall back silently.
+        error   - throw an error
+        silent  - silently fallback to the internally selected algorithm
+
+    - name        : MPIR_CVAR_COLL_SELECTION_JSON_FILE
+      category    : COLLECTIVE
+      type        : string
+      default     : ""
+      class       : none
+      verbosity   : MPI_T_VERBOSITY_USER_BASIC
+      scope       : MPI_T_SCOPE_ALL_EQ
+      description : >-
+        Defines the location of tuning file that selects basic collective algorithms.
+
+    - name        : MPIR_CVAR_HIERARCHY_DUMP
+      category    : COLLECTIVE
+      type        : boolean
+      default     : false
+      class       : none
+      verbosity   : MPI_T_VERBOSITY_USER_BASIC
+      scope       : MPI_T_SCOPE_ALL_EQ
+      description : >-
+        If set to true, each rank will dump the hierarchy data structure to a file named "hierarchy[rank]" in the current folder.
+        If set to false, the hierarchy data structure will not be dumped.
+
+    - name        : MPIR_CVAR_COORDINATES_FILE
+      category    : COLLECTIVE
+      type        : string
+      default     : ""
+      class       : device
+      verbosity   : MPI_T_VERBOSITY_USER_BASIC
+      scope       : MPI_T_SCOPE_ALL_EQ
+      description : >-
+        Defines the location of the input coordinates file.
+
+    - name        : MPIR_CVAR_COLL_TREE_DUMP
+      category    : COLLECTIVE
+      type        : boolean
+      default     : false
+      class       : device
+      verbosity   : MPI_T_VERBOSITY_USER_BASIC
+      scope       : MPI_T_SCOPE_ALL_EQ
+      description : >-
+        If set to true, each rank will dump the tree to a file named "colltree[rank].json" in the current folder.
+        If set to false, the tree will not be dumped.
+
+    - name        : MPIR_CVAR_COORDINATES_DUMP
+      category    : COLLECTIVE
+      type        : boolean
+      default     : false
+      class       : device
+      verbosity   : MPI_T_VERBOSITY_USER_BASIC
+      scope       : MPI_T_SCOPE_ALL_EQ
+      description : >-
+        If set to true, rank 0 will dump the network coordinates to a file named "coords" in the current folder.
+        If set to false, the network coordinates will not be dumped.
+
+    - name        : MPIR_CVAR_DUMP_COLL_ALGO_COUNTERS
+      category    : COLLECTIVE
+      type        : int
+      default     : -1
+      class       : none
+      verbosity   : MPI_T_VERBOSITY_USER_BASIC
+      scope       : MPI_T_SCOPE_ALL_EQ
+      description : >-
+        Set MPIR_CVAR_DUMP_COLL_ALGO_COUNTERS to a global rank number (including 0) for that rank to dump collective
+        algorithm counters.
+
+=== END_MPI_T_CVAR_INFO_BLOCK ===
+*/
+
+int MPIR_Nbc_progress_hook_id = 0;
+
+static MPIR_Csel_node_s *csel_tree_main;
+static MPIR_Csel_node_s *csel_tree_auto;
+
+/* table of all collective algorithms */
+MPIR_Coll_algo_fn *MPIR_Coll_algo_table;
+
+/* string tables to facilitate parsing and debugging */
+const char **MPIR_Coll_type_names;
+const char **MPIR_Coll_algo_names;
+const char **MPIR_Csel_condition_names;
+bool *MPIR_Csel_condition_has_thresh;
+
+/* algorithm counters */
+int *MPIR_Coll_algo_counters;
+
+/* the casts avoid -Wenum-compare between the two enum types */
+#define CHECK_TREE_TYPE_CVAR(cvar) \
+    MPL_COMPILE_TIME_ASSERT((int) cvar##_kary == MPIR_TREE_TYPE_KARY && \
+                            (int) cvar##_knomial_1 == MPIR_TREE_TYPE_KNOMIAL_1 && \
+                            (int) cvar##_knomial_2 == MPIR_TREE_TYPE_KNOMIAL_2)
+#define CHECK_TREE_TYPE_CVAR_TOPO(cvar) \
+    MPL_COMPILE_TIME_ASSERT((int) cvar##_topology_aware == MPIR_TREE_TYPE_TOPOLOGY_AWARE && \
+                            (int) cvar##_topology_aware_k == MPIR_TREE_TYPE_TOPOLOGY_AWARE_K && \
+                            (int) cvar##_topology_wave == MPIR_TREE_TYPE_TOPOLOGY_WAVE)
+
+int MPII_Coll_init(void)
+{
+    int mpi_errno = MPI_SUCCESS;
+
+    /* The TREE_TYPE CVARs are passed as MPIR_Tree_type_t, so their enum values must
+     * list the tree types in the same order */
+    CHECK_TREE_TYPE_CVAR(MPIR_CVAR_IALLREDUCE_TREE_TYPE);
+    CHECK_TREE_TYPE_CVAR(MPIR_CVAR_IBCAST_TREE_TYPE);
+    CHECK_TREE_TYPE_CVAR(MPIR_CVAR_ALLREDUCE_TREE_TYPE);
+    CHECK_TREE_TYPE_CVAR_TOPO(MPIR_CVAR_ALLREDUCE_TREE_TYPE);
+    CHECK_TREE_TYPE_CVAR(MPIR_CVAR_BCAST_TREE_TYPE);
+    CHECK_TREE_TYPE_CVAR_TOPO(MPIR_CVAR_BCAST_TREE_TYPE);
+    CHECK_TREE_TYPE_CVAR(MPIR_CVAR_IREDUCE_TREE_TYPE);
+    CHECK_TREE_TYPE_CVAR_TOPO(MPIR_CVAR_IREDUCE_TREE_TYPE);
+
+    /* register non blocking collectives progress hook */
+    mpi_errno = MPIR_Progress_hook_register(-1, MPIDU_Sched_progress, &MPIR_Nbc_progress_hook_id);
+    MPIR_ERR_CHECK(mpi_errno);
+
+    /* initialize transports */
+    mpi_errno = MPII_TSP_init();
+    MPIR_ERR_CHECK(mpi_errno);
+
+    /* initialize algorithms */
+    mpi_errno = MPII_Stubalgo_init();
+    MPIR_ERR_CHECK(mpi_errno);
+    mpi_errno = MPII_Treealgo_init();
+    MPIR_ERR_CHECK(mpi_errno);
+    mpi_errno = MPII_Recexchalgo_init();
+    MPIR_ERR_CHECK(mpi_errno);
+
+    MPIR_Coll_type_names = MPL_malloc(MPIR_CSEL_NUM_COLL_TYPES * sizeof(char *), MPL_MEM_COLL);
+    MPIR_Coll_algo_table =
+        MPL_malloc(MPIR_CSEL_NUM_ALGORITHMS * sizeof(MPIR_Coll_algo_fn), MPL_MEM_COLL);
+    MPIR_Coll_algo_names = MPL_malloc(MPIR_CSEL_NUM_ALGORITHMS * sizeof(char *), MPL_MEM_COLL);
+    MPIR_Csel_condition_names = MPL_malloc(MPIR_CSEL_NUM_CONDITIONS * sizeof(char *), MPL_MEM_COLL);
+    MPIR_Csel_condition_has_thresh =
+        MPL_calloc(MPIR_CSEL_NUM_CONDITIONS, sizeof(bool), MPL_MEM_COLL);
+
+    MPIR_Coll_algo_counters = MPL_calloc(MPIR_CSEL_NUM_ALGORITHMS, sizeof(int), MPL_MEM_COLL);
+
+    /* initialize names and tables */
+    MPII_Coll_type_init();
+    MPII_Coll_algo_init();
+    MPII_Csel_init_condition_names();
+
+    /* initialize selection tree */
+    mpi_errno = MPIR_Csel_load_buf(MPII_coll_selection_json);
+    MPIR_ERR_CHECK(mpi_errno);
+
+    if (strcmp(MPIR_CVAR_COLL_SELECTION_JSON_FILE, "") != 0) {
+        mpi_errno = MPIR_Csel_load_file(MPIR_CVAR_COLL_SELECTION_JSON_FILE);
+        MPIR_ERR_CHECK(mpi_errno);
+    }
+
+    csel_tree_main = MPIR_Csel_get_tree("main");
+    MPIR_Assert(csel_tree_main);
+
+    csel_tree_auto = MPIR_Csel_get_tree("auto");
+    if (!csel_tree_auto) {
+        csel_tree_auto = csel_tree_main;
+    }
+
+    mpi_errno = MPIR_cga_init();
+    MPIR_ERR_CHECK(mpi_errno);
+
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+static void dump_coll_algo_counters(void)
+{
+    printf("==== Dump collective algorithm counters ====\n");
+    for (int i = 0; i < MPIR_CSEL_NUM_ALGORITHMS; i++) {
+        if (MPIR_Coll_algo_counters[i] > 0) {
+            printf("%10d  %s\n", MPIR_Coll_algo_counters[i], MPIR_Coll_algo_names[i]);
+        }
+    }
+    printf("==== END collective algorithm counters ====\n");
+}
+
+int MPII_Coll_finalize(void)
+{
+    int mpi_errno = MPI_SUCCESS;
+
+    if (MPIR_CVAR_DUMP_COLL_ALGO_COUNTERS >= 0 &&
+        MPIR_Process.rank == MPIR_CVAR_DUMP_COLL_ALGO_COUNTERS) {
+        dump_coll_algo_counters();
+    }
+
+    /* deregister non blocking collectives progress hook */
+    MPIR_Progress_hook_deregister(MPIR_Nbc_progress_hook_id);
+
+    mpi_errno = MPII_TSP_finalize();
+    MPIR_ERR_CHECK(mpi_errno);
+
+    mpi_errno = MPIR_Csel_free();
+    MPIR_ERR_CHECK(mpi_errno);
+
+    MPL_free(MPIR_Coll_algo_table);
+    MPL_free(MPIR_Coll_algo_names);
+    MPL_free(MPIR_Coll_type_names);
+    MPL_free(MPIR_Csel_condition_names);
+    MPL_free(MPIR_Csel_condition_has_thresh);
+    MPL_free(MPIR_Coll_algo_counters);
+
+    mpi_errno = MPIR_cga_finalize();
+    MPIR_ERR_CHECK(mpi_errno);
+
+    csel_tree_main = NULL;
+    csel_tree_auto = NULL;
+
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+/* Function used by CH3 progress engine to decide whether to
+ * block for a recv operation */
+int MPIR_Coll_safe_to_block(void)
+{
+    return MPII_TSP_scheds_are_pending() == false;
+}
+
+/* Function to initialize communicators for collectives */
+int MPIR_Coll_comm_init(MPIR_Comm * comm)
+{
+    int mpi_errno = MPI_SUCCESS;
+
+    /* initialize any stub algo related data structures */
+    mpi_errno = MPII_Stubalgo_comm_init(comm);
+    MPIR_ERR_CHECK(mpi_errno);
+    /* initialize any tree algo related data structures */
+    mpi_errno = MPII_Treealgo_comm_init(comm);
+    MPIR_ERR_CHECK(mpi_errno);
+
+    /* initialize any transport data structures */
+    mpi_errno = MPII_TSP_comm_init(comm);
+    MPIR_ERR_CHECK(mpi_errno);
+
+    /* initialize algorithms */
+    mpi_errno = MPII_Recexchalgo_comm_init(comm);
+    if (mpi_errno)
+        MPIR_ERR_POP(mpi_errno);
+
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+/* Function to cleanup any communicators for collectives */
+int MPII_Coll_comm_cleanup(MPIR_Comm * comm)
+{
+    int mpi_errno = MPI_SUCCESS;
+
+    /* cleanup all collective communicators */
+    mpi_errno = MPII_Stubalgo_comm_cleanup(comm);
+    MPIR_ERR_CHECK(mpi_errno);
+    mpi_errno = MPII_Treealgo_comm_cleanup(comm);
+    MPIR_ERR_CHECK(mpi_errno);
+
+    /* cleanup transport data */
+    mpi_errno = MPII_TSP_comm_cleanup(comm);
+    MPIR_ERR_CHECK(mpi_errno);
+
+    /* initialize algorithms */
+    mpi_errno = MPII_Recexchalgo_comm_cleanup(comm);
+    if (mpi_errno)
+        MPIR_ERR_POP(mpi_errno);
+
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+int MPIR_Coll_run_tree(MPIR_Csel_node_s * tree, MPIR_Csel_coll_sig_s * coll_sig)
+{
+    int mpi_errno = MPI_SUCCESS;
+
+    MPII_Csel_container_s *cnt = MPIR_Csel_search(tree, coll_sig);
+    MPIR_ERR_CHKANDJUMP(!cnt, mpi_errno, MPI_ERR_OTHER, "**csel_noresult");
+
+    mpi_errno = MPIR_Coll_algo_table[cnt->id] (coll_sig, cnt);
+    MPIR_ERR_CHECK(mpi_errno);
+
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+int MPIR_Coll_json(MPIR_Csel_coll_sig_s * coll_sig)
+{
+    int mpi_errno = MPI_SUCCESS;
+
+    /* First check whether user has set an algorithm CVAR */
+    int coll_type = coll_sig->coll_type;
+    int cvar_val = *MPIR_Coll_cvar_table[coll_type];
+    if (cvar_val) {
+        coll_sig->flags |= MPIR_COLL_SIG_FLAG__CVAR;
+        int algo_id = MPIR_Coll_cvar_to_algo_id(coll_type, cvar_val);
+        /* only an MPI_T write can set a value that is not one of the algorithms */
+        MPIR_ERR_CHKANDJUMP2(algo_id == MPII_CSEL_CONTAINER_TYPE__ALGORITHM__END, mpi_errno,
+                             MPI_ERR_OTHER, "**collcvarval", "**collcvarval %s %d",
+                             MPIR_Coll_type_names[coll_type], cvar_val);
+        bool restriction_ok = MPIR_Coll_check_algo_restriction(coll_sig, algo_id);
+
+        if (restriction_ok) {
+            MPII_Csel_container_s algo_cnt;
+            MPIR_Coll_init_algo_container(coll_sig, algo_id, &algo_cnt);
+            mpi_errno = MPIR_Coll_algo_table[algo_id] (coll_sig, &algo_cnt);
+            MPIR_ERR_CHECK(mpi_errno);
+            goto fn_exit;
+        } else {
+            /* Error or Fall-thru. An inner call of a compositional algorithm (on an internal
+             * sub-communicator) falls through, so that forcing e.g. smp does not fail on the
+             * inner calls that the same CVAR also reaches. */
+            if (MPIR_CVAR_COLLECTIVE_FALLBACK == MPIR_CVAR_COLLECTIVE_FALLBACK_error &&
+                !(coll_sig->comm_ptr->attr & MPIR_COMM_ATTR__SUBCOMM)) {
+                MPIR_ERR_SETANDJUMP(mpi_errno, MPI_ERR_OTHER, "**nosupport");
+            }
+        }
+    }
+
+    mpi_errno = MPIR_Coll_run_tree(csel_tree_main, coll_sig);
+    MPIR_ERR_CHECK(mpi_errno);
+
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+/* run the auto tree, for general algorithms that continue the selection */
+int MPIR_Coll_run_auto(MPIR_Csel_coll_sig_s * coll_sig)
+{
+    return MPIR_Coll_run_tree(csel_tree_auto, coll_sig);
+}
+
+/* blocking collectives by calling its nonblocking forms */
+int MPIR_Coll_nb(MPIR_Csel_coll_sig_s * coll_sig, MPII_Csel_container_s * me)
+{
+    int mpi_errno = MPI_SUCCESS;
+
+    /* Trick: blocking coll_type is even. Its nonblocking type is +1 */
+    MPIR_Assert(coll_sig->coll_type % 2 == 0);
+    coll_sig->coll_type += 1;
+
+    mpi_errno = MPIR_Coll_run_auto(coll_sig);
+    MPIR_ERR_CHECK(mpi_errno);
+
+    MPIR_Request *req;
+    MPII_SCHED_START(coll_sig->sched_type, coll_sig->sched, coll_sig->comm_ptr, &req);
+
+    mpi_errno = MPIC_Wait(req);
+    MPIR_ERR_CHECK(mpi_errno);
+    MPIR_Request_free(req);
+
+    /* clean up coll_sig just in case */
+    coll_sig->coll_type -= 1;
+    coll_sig->sched = NULL;
+
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}

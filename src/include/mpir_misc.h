@@ -1,0 +1,82 @@
+/*
+ * Copyright (C) by Argonne National Laboratory
+ *     See COPYRIGHT in top-level directory
+ */
+
+#ifndef MPIR_MISC_H_INCLUDED
+#define MPIR_MISC_H_INCLUDED
+
+#define MPIR_UNIVERSE_SIZE_NOT_SET -1
+#define MPIR_UNIVERSE_SIZE_NOT_AVAILABLE -2
+
+#define MPIR_FINALIZE_CALLBACK_PRIO 5
+#define MPIR_FINALIZE_CALLBACK_HANDLE_CHECK_PRIO 1
+#define MPIR_FINALIZE_CALLBACK_DEFAULT_PRIO 0
+#define MPIR_FINALIZE_CALLBACK_MAX_PRIO 10
+
+/*E
+  MPIR_Lang_t - Known language bindings for MPI
+
+  A few operations in MPI need to know what language they were called from
+  or created by.  This type enumerates the possible languages so that
+  the MPI implementation can choose the correct behavior.  An example of this
+  are the keyval attribute copy and delete functions.
+
+  MPIR_LANG__X is for new extensions e.g. MPIX_Comm_create_errhandler_x,
+  which calls with scalar input as in C and an extra_state for context.
+  It is meant language bindings to use a proxy for user callbacks.
+
+  Module:
+  Attribute-DS
+  E*/
+typedef enum MPIR_Lang_t {
+    MPIR_LANG__C,
+    MPIR_LANG__X
+#ifdef HAVE_CXX_BINDING
+        , MPIR_LANG__CXX
+#endif
+} MPIR_Lang_t;
+
+extern MPL_initlock_t MPIR_init_lock;
+
+/* Contiguous datatype calculates buffer address with `(char *) buf + dt_true_lb`.
+ * However, dt_true_lb is treated as ptrdiff_t (signed), and when buf is MPI_BOTTOM
+ * and on 32-bit systems, ubsan will warn the latter overflow. Cast to uintptr_t
+ * to work around.
+ */
+#define MPIR_get_contig_ptr(buf, true_lb) \
+    (void *) ((uintptr_t) buf + (uintptr_t) (true_lb))
+
+/*@ MPIR_Add_finalize - Add a routine to be called when MPI_Finalize is invoked
+
++ routine - Routine to call
+. extra   - Void pointer to data to pass to the routine
+- priority - Indicates the priority of this callback and controls the order
+  in which callbacks are executed.  Use a priority of zero for most handlers;
+  higher priorities will be executed first.
+
+Notes:
+  The routine 'MPID_Finalize' is executed with priority
+  'MPIR_FINALIZE_CALLBACK_PRIO' (currently defined as 5).  Handlers with
+  a higher priority execute before 'MPID_Finalize' is called; those with
+  a lower priority after 'MPID_Finalize' is called.
+@*/
+void MPIR_Add_finalize(int (*routine) (void *), void *extra, int priority);
+
+
+#define MPIR_CAST(T, val) CAST_##T((val))
+#ifdef NDEBUG
+#define MPIR_CAST_int(val) ((int) (val))
+#define MPIR_CAST_Aint(val) ((MPI_Aint) (val))
+#else
+#define MPIR_CAST_int(val) \
+    (((val) > INT_MAX || ((val) < 0 && (val) < INT_MIN)) ? (assert(0), 0) : (int) (val))
+#define MPIR_CAST_Aint(val) \
+    (((val) > MPIR_AINT_MAX || ((val) < 0 && (val) < MPIR_AINT_MIN)) ? (assert(0), 0) \
+     : (MPI_Aint) (val))
+#endif
+
+int MPIR_get_supported_memory_kinds(char *requested_kinds, char **out_kinds);
+void MPIR_get_memory_kinds_from_comm(MPIR_Comm * comm_ptr, char **out_kinds);
+
+#endif /* MPIR_MISC_H_INCLUDED */

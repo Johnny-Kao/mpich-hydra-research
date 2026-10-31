@@ -1,0 +1,104 @@
+# vim: set ft=c:
+
+MPI_Aint_add:
+    .desc: Returns the sum of base and disp
+    .skip: ThreadSafe, Errors, validate-ANY
+    .seealso: MPI_Aint_diff
+    .impl: direct
+{
+    MPI_Aint result;
+
+    MPIR_ERRTEST_INITIALIZED_ORDIE();
+
+    MPIR_FUNC_TERSE_ENTER;
+    result = MPID_Aint_add(base, disp);
+    MPIR_FUNC_TERSE_EXIT;
+
+    return result;
+}
+
+MPI_Aint_diff:
+    .desc: Returns the difference between addr1 and addr2
+    .skip: ThreadSafe, Errors, validate-ANY
+    .seealso: MPI_Aint_add
+    .impl: direct
+{
+    MPI_Aint result;
+
+    MPIR_ERRTEST_INITIALIZED_ORDIE();
+
+    MPIR_FUNC_TERSE_ENTER;
+    result = MPID_Aint_diff(addr1, addr2);
+    MPIR_FUNC_TERSE_EXIT;
+
+    return result;
+}
+
+MPI_Get_processor_name:
+    .desc: Gets the name of the processor
+{
+    mpi_errno = MPID_Get_processor_name(name, MPI_MAX_PROCESSOR_NAME, resultlen);
+    if (mpi_errno != MPI_SUCCESS)
+        goto fn_fail;
+}
+
+MPI_Get_library_version:
+    .desc: Return the version number of MPI library
+    .skip: initcheck
+
+MPI_Pcontrol:
+    .desc: Controls profiling
+    .skip: initcheck, ThreadSafe, validate-PROFILE_LEVEL, validate-VARARGS
+    .impl: skip
+
+MPI_Get_version:
+    .desc: Return the version number of MPI
+    .skip: initcheck
+
+MPIX_GPU_query_support:
+    gpu_type: GPU_TYPE, [MPIX_GPU_SUPPORT_CUDA, MPIX_GPU_SUPPORT_ZE, or MPIX_GPU_SUPPORT_HIP]
+    is_supported: LOGICAL, direction=out, [true if gpu of given type is supported, false otherwise.]
+    .desc: Returns whether the specific type of GPU is supported
+    .skip: global_cs, validate-GPU_TYPE
+
+MPIX_Query_cuda_support:
+    .desc: Returns whether CUDA is supported
+    .impl: direct
+    .skip: global_cs, Errors
+{
+    int is_supported = 0;
+    int mpi_errno ATTRIBUTE((unused));
+
+    mpi_errno = PMPIX_GPU_query_support(MPIX_GPU_SUPPORT_CUDA, &is_supported);
+    assert(mpi_errno == MPI_SUCCESS);
+
+    return is_supported;
+}
+
+MPIX_Query_ze_support:
+    .desc: Returns whether ZE (Intel GPU) is supported
+    .impl: direct
+    .skip: global_cs, Errors
+{
+    int is_supported = 0;
+    int mpi_errno ATTRIBUTE((unused));
+
+    mpi_errno = PMPIX_GPU_query_support(MPIX_GPU_SUPPORT_ZE, &is_supported);
+    assert(mpi_errno == MPI_SUCCESS);
+
+    return is_supported;
+}
+
+MPIX_Query_hip_support:
+    .desc: Returns whether HIP (AMD GPU) is supported
+    .impl: direct
+    .skip: global_cs, Errors
+{
+    int is_supported = 0;
+    int mpi_errno ATTRIBUTE((unused));
+
+    mpi_errno = PMPIX_GPU_query_support(MPIX_GPU_SUPPORT_HIP, &is_supported);
+    assert(mpi_errno == MPI_SUCCESS);
+
+    return is_supported;
+}

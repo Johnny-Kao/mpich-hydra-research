@@ -1,0 +1,86 @@
+/*
+ * Copyright (C) by Argonne National Laboratory
+ *     See COPYRIGHT in top-level directory
+ */
+
+#ifndef MPIR_GPU_UTIL_H_INCLUDED
+#define MPIR_GPU_UTIL_H_INCLUDED
+
+/* A helper function for allocating temporary buffer */
+MPL_STATIC_INLINE_PREFIX void *MPIR_alloc_buffer(MPI_Aint count, MPI_Datatype datatype)
+{
+    MPI_Aint shift, size;
+    MPIR_Datatype_get_buffer_span(datatype, count, &shift, &size);
+
+    void *host_buf = MPL_malloc(size, MPL_MEM_OTHER);
+    MPIR_Assert(host_buf);
+
+    host_buf = (char *) host_buf - shift;
+    return host_buf;
+}
+
+/* Free a buffer allocated by MPIR_alloc_buffer */
+MPL_STATIC_INLINE_PREFIX void MPIR_free_buffer(void *buf, MPI_Aint count, MPI_Datatype datatype)
+{
+    MPI_Aint shift, size;
+    MPIR_Datatype_get_buffer_span(datatype, count, &shift, &size);
+
+    /* The pointers was previously shifted */
+    buf = (char *) buf + shift;
+    MPL_free(buf);
+}
+
+/* If buf is device memory, allocate a host buffer that can hold the data,
+ * return the host buffer, or NULL if buf is not device memory */
+MPL_STATIC_INLINE_PREFIX void *MPIR_alloc_buffer_if_dev(const void *buf,
+                                                        MPI_Aint count, MPI_Datatype datatype)
+{
+    MPL_pointer_attr_t attr;
+    MPIR_GPU_query_pointer_attr(buf, &attr);
+
+    /* FIXME: do we allocate buffer for memory that is neither host nor device? */
+    if (!MPL_gpu_attr_is_dev(&attr)) {
+        return NULL;
+    } else {
+        return MPIR_alloc_buffer(count, datatype);
+    }
+}
+
+/* If buf is device memory, allocate a host buffer and copy the content, and return the host
+ * buffer. Return NULL if buf is not a device memory */
+MPL_STATIC_INLINE_PREFIX void *MPIR_gpu_host_swap(const void *buf,
+                                                  MPI_Aint count, MPI_Datatype datatype)
+{
+    void *host_buf = MPIR_alloc_buffer_if_dev(buf, count, datatype);
+    if (host_buf) {
+        MPIR_Localcopy(buf, count, datatype, host_buf, count, datatype);
+    }
+
+    return host_buf;
+}
+
+MPL_STATIC_INLINE_PREFIX void MPIR_gpu_host_swap_gpu(const void *buf, MPI_Aint count,
+                                                     MPI_Datatype datatype,
+                                                     MPL_pointer_attr_t attr, void *host_buf)
+{
+    if (host_buf) {
+        MPIR_Localcopy_gpu(buf, count, datatype, 0, &attr, host_buf, count, datatype, 0, NULL,
+                           MPL_GPU_ENGINE_TYPE_COPY_HIGH_BANDWIDTH, true);
+    }
+}
+
+MPL_STATIC_INLINE_PREFIX void MPIR_gpu_swap_back(void *host_buf, void *gpu_buf,
+                                                 MPI_Aint count, MPI_Datatype datatype)
+{
+    MPIR_Localcopy(host_buf, count, datatype, gpu_buf, count, datatype);
+    MPIR_free_buffer(host_buf, count, datatype);
+}
+
+MPL_STATIC_INLINE_PREFIX void MPIR_gpu_swap_back_gpu(void *host_buf, void *gpu_buf, MPI_Aint count,
+                                                     MPI_Datatype datatype, MPL_pointer_attr_t attr)
+{
+    MPIR_Localcopy_gpu(host_buf, count, datatype, 0, NULL, gpu_buf, count, datatype, 0, &attr,
+                       MPL_GPU_ENGINE_TYPE_COPY_HIGH_BANDWIDTH, true);
+}
+
+#endif /* MPIR_GPU_UTIL_H_INCLUDED */

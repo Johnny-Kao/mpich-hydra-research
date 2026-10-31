@@ -1,0 +1,69 @@
+/*
+ * Copyright (C) by Argonne National Laboratory
+ *     See COPYRIGHT in top-level directory
+ */
+
+#include "mpidimpl.h"
+#include "gpu_types.h"
+#include "ipc_noinline.h"       /* MPIDI_FD_comm_bootstrap */
+
+int MPIDI_GPU_init_local(void)
+{
+    int mpi_errno = MPI_SUCCESS;
+
+    int device_count;
+    int my_max_dev_id;
+    int my_max_subdev_id;
+
+    MPIDI_GPUI_global.initialized = 0;
+
+    if (MPIR_CVAR_ENABLE_GPU) {
+        int mpl_err = MPL_gpu_get_dev_count(&device_count, &my_max_dev_id, &my_max_subdev_id);
+        MPIR_ERR_CHKANDJUMP(mpl_err != MPL_SUCCESS, mpi_errno, MPI_ERR_OTHER,
+                            "**gpu_get_dev_count");
+
+        MPIDI_GPUI_global.local_device_count = device_count;
+        MPL_gpu_free_hook_register(MPIDI_GPU_handle_free_hook);
+
+        MPIDI_GPUI_global.initialized = 1;
+    }
+
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+int MPIDI_GPU_comm_bootstrap(MPIR_Comm * comm)
+{
+    int mpi_errno = MPI_SUCCESS;
+
+    if (MPIR_Process.local_size == 1) {
+        goto fn_exit;
+    }
+
+    /* This hook is needed when using the drmfd shareable ipc handle implementation in ze backend */
+    mpi_errno = MPIDI_FD_comm_bootstrap(comm);
+    MPIR_ERR_CHECK(mpi_errno);
+
+  fn_exit:
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}
+
+int MPIDI_GPU_mpi_finalize_hook(void)
+{
+    int mpi_errno = MPI_SUCCESS;
+
+    MPIR_FUNC_ENTER;
+
+    mpi_errno = MPIDI_GPU_ipc_cache_finalize();
+    MPIR_ERR_CHECK(mpi_errno);
+
+  fn_exit:
+    MPIR_FUNC_EXIT;
+    return mpi_errno;
+  fn_fail:
+    goto fn_exit;
+}

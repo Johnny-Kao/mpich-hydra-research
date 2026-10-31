@@ -1,0 +1,627 @@
+##
+## Copyright (C) by Argonne National Laboratory
+##     See COPYRIGHT in top-level directory
+##
+
+ACLOCAL_AMFLAGS = -I confdb
+
+# automake requires that we initialize variables to something, even just empty,
+# before appending to them with "+="
+AM_CFLAGS = @VISIBILITY_CFLAGS@
+AM_CPPFLAGS =
+include_HEADERS =
+nodist_include_HEADERS =
+nodist_noinst_HEADERS =
+BUILT_SOURCES =
+bin_PROGRAMS =
+bin_SCRIPTS =
+noinst_DATA =
+noinst_HEADERS =
+noinst_LIBRARIES =
+noinst_LTLIBRARIES =
+sysconf_DATA =
+nodist_pkgconfig_DATA =
+CLEANFILES =
+DISTCLEANFILES =
+MAINTAINERCLEANFILES =
+SUFFIXES = 
+DOC_SUBDIRS =
+MANDOC_SUBDIRS =
+HTMLDOC_SUBDIRS =
+INSTALL_DATA_LOCAL_TARGETS =
+
+# list of asciidoc files
+doc1_src =
+doc3_src =
+
+# add (+=) target names to this variable to add them to the dependencies of the
+# 'clean-local' target
+CLEAN_LOCAL_TARGETS =
+
+# used by nodist_pkgconfig_DATA
+pkgconfigdir = @pkgconfigdir@
+
+# contains all of the "errnames.txt" files that are used by maint/extracterrmsgs
+# to build src/mpi/errhan/defmsg.h
+errnames_txt_files = 
+
+external_subdirs = @mpl_srcdir@ @hwloc_srcdir@ @yaksa_srcdir@ @pmi_srcdir@
+external_ldflags = @RPATHS@
+external_libs = @WRAPPER_LIBS@
+
+# convenience libs that do not depend on MPI
+pmpi_convenience_libs = @mpl_lib@ @hwloc_lib@ @yaksa_lib@ @pmi_lib@
+
+# convenience libs that depend on MPI (either MPI functions or MPI constants)
+mpi_convenience_libs =
+abi_convenience_libs =
+
+if BUILD_ROMIO
+    external_subdirs += src/mpi/romio
+if BUILD_MPICH_LIB
+    mpi_convenience_libs += src/mpi/romio/libromio.la
+endif
+if BUILD_ABI_LIB
+    abi_convenience_libs += src/mpi/romio/libromio_abi.la
+endif
+endif
+
+SUBDIRS = ${external_subdirs}
+
+lib_lib@MPILIBNAME@_la_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC \
+	$(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=link $(CCLD) \
+	$(lib_lib@MPILIBNAME@_la_CFLAGS) $(CFLAGS) \
+	$(lib_lib@MPILIBNAME@_la_LDFLAGS) $(LDFLAGS) -o $@
+lib_lib@PMPILIBNAME@_la_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC \
+	$(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=link $(CCLD) \
+	$(lib_lib@PMPILIBNAME@_la_CFLAGS) $(CFLAGS) \
+	$(lib_lib@PMPILIBNAME@_la_LDFLAGS) $(LDFLAGS) -o $@
+
+
+## Create lists of files for different libraries
+##
+## mpi_sources: When compiled with -DMPICH_MPI_FROM_PMPI, these files
+## provide "MPI_" public functions for the C bindings and end up in
+## lib@MPILIBNAME@.  When compiled without this macro, these files
+## provide "PMPI_" public functions for the C bindings as well as a
+## few other internal MPICH functions, all of which end up in
+## lib@PMPILIBNAME@ (which is the same as lib@MPILIBNAME@ on systems
+## that support weak symbols).
+##
+## mpi_abi_sources: similar to mpi_sources, but used to compile
+## lib@MPIABILIBNAME@.
+##
+## mpi_cxx_sources: When compiled with -DMPICH_MPI_FROM_PMPI, these
+## files provide the "MPI" public functions for the C++ bindings and
+## end up in lib@MPICXXLIBNAME@.
+##
+## mpi_core_sources: These files are internal non-public functions
+## that are used by all bindings.
+mpi_sources =
+mpi_abi_sources =
+mpi_cxx_sources =
+mpi_core_sources =
+mpi_abi_core_sources =
+
+lib_LTLIBRARIES =
+
+# include our subdir automake fragments
+include src/Makefile.mk
+include packaging/Makefile.mk
+
+if BUILD_MPICH_LIB
+if BUILD_PROFILING_LIB
+# -------- mpich-abi: libpmpi + libmpi ------------------
+#
+lib_LTLIBRARIES += lib/lib@PMPILIBNAME@.la
+lib_lib@PMPILIBNAME@_la_SOURCES = $(mpi_sources) $(mpi_core_sources)
+lib_lib@PMPILIBNAME@_la_LDFLAGS = $(external_ldflags) $(ABIVERSIONFLAGS)
+lib_lib@PMPILIBNAME@_la_CPPFLAGS = $(AM_CPPFLAGS)
+lib_lib@PMPILIBNAME@_la_LIBADD = $(external_libs) $(pmpi_convenience_libs) $(mpi_convenience_libs)
+EXTRA_lib_lib@PMPILIBNAME@_la_DEPENDENCIES = $(pmpi_convenience_libs) $(mpi_convenience_libs)
+
+# lib@MPILIBNAME@.la might depend on lib@PMPILIBNAME@.la.  We add them
+# in that order to lib_LTLIBRARIES so libtool doesn't get
+# confused. (see https://bugzilla.redhat.com/show_bug.cgi?id=91110)
+lib_LTLIBRARIES += lib/lib@MPILIBNAME@.la
+lib_lib@MPILIBNAME@_la_SOURCES = $(mpi_sources)
+lib_lib@MPILIBNAME@_la_LDFLAGS = $(ABIVERSIONFLAGS)
+lib_lib@MPILIBNAME@_la_CPPFLAGS = $(AM_CPPFLAGS) -DMPICH_MPI_FROM_PMPI
+lib_lib@MPILIBNAME@_la_LIBADD = lib/lib@PMPILIBNAME@.la
+
+else !BUILD_PROFILING_LIB
+# -------- mpich-abi: libmpi ------------------
+#
+lib_LTLIBRARIES += lib/lib@MPILIBNAME@.la
+lib_lib@MPILIBNAME@_la_SOURCES = $(mpi_sources) $(mpi_core_sources)
+lib_lib@MPILIBNAME@_la_LDFLAGS = $(external_ldflags) $(ABIVERSIONFLAGS)
+lib_lib@MPILIBNAME@_la_CPPFLAGS = $(AM_CPPFLAGS)
+lib_lib@MPILIBNAME@_la_LIBADD = $(external_libs) $(pmpi_convenience_libs) $(mpi_convenience_libs)
+EXTRA_lib_lib@MPILIBNAME@_la_DEPENDENCIES = $(pmpi_convenience_libs) $(mpi_convenience_libs)
+
+endif !BUILD_PROFILING_LIB
+endif BUILD_MPICH_LIB
+
+if BUILD_ABI_LIB
+abi_cppflags = -DMPICH_BUILD_MPI_ABI
+if BUILD_PROFILING_LIB
+# -------- mpi-abi: libpmpi_abi + libmpi_abi ------------------
+#
+# dropping mpi_fc_sources and mpi_cxx_sources from libmpmpi since they
+# don't contribute any PMPI symbols.
+lib_LTLIBRARIES += lib/lib@PMPIABILIBNAME@.la
+lib_lib@PMPIABILIBNAME@_la_SOURCES = $(mpi_abi_sources) $(mpi_f77_sources) $(mpi_core_sources) $(mpi_abi_core_sources)
+lib_lib@PMPIABILIBNAME@_la_LDFLAGS = $(external_ldflags) $(ABI_ABIVERSIONFLAGS)
+lib_lib@PMPIABILIBNAME@_la_CPPFLAGS = $(AM_CPPFLAGS) $(abi_cppflags)
+lib_lib@PMPIABILIBNAME@_la_LIBADD = $(external_libs) $(pmpi_convenience_libs) $(abi_convenience_libs)
+EXTRA_lib_lib@PMPIABILIBNAME@_la_DEPENDENCIES = $(pmpi_convenience_libs) $(abi_convenience_libs)
+
+# lib@MPIABILIBNAME@.la might depend on lib@PMPIABILIBNAME@.la.  We add them
+# in that order to lib_LTLIBRARIES so libtool doesn't get
+# confused. (see https://bugzilla.redhat.com/show_bug.cgi?id=91110)
+lib_LTLIBRARIES += lib/lib@MPIABILIBNAME@.la
+lib_lib@MPIABILIBNAME@_la_SOURCES = $(mpi_abi_sources)
+lib_lib@MPIABILIBNAME@_la_LDFLAGS = $(ABI_ABIVERSIONFLAGS)
+lib_lib@MPIABILIBNAME@_la_CPPFLAGS = $(AM_CPPFLAGS) -DMPICH_MPI_FROM_PMPI $(abi_cppflags)
+lib_lib@MPIABILIBNAME@_la_LIBADD = lib/lib@PMPIABILIBNAME@.la
+
+else !BUILD_PROFILING_LIB
+# -------- mpich-abi: libmpi_abi ------------------
+#
+lib_LTLIBRARIES += lib/lib@MPIABILIBNAME@.la
+lib_lib@MPIABILIBNAME@_la_SOURCES = $(mpi_abi_sources) $(mpi_core_sources) $(mpi_abi_core_sources)
+lib_lib@MPIABILIBNAME@_la_LDFLAGS = $(external_ldflags) $(ABI_ABIVERSIONFLAGS)
+lib_lib@MPIABILIBNAME@_la_CPPFLAGS = $(AM_CPPFLAGS) $(abi_cppflags)
+lib_lib@MPIABILIBNAME@_la_LIBADD = $(external_libs) $(pmpi_convenience_libs) $(abi_convenience_libs)
+EXTRA_lib_lib@MPIABILIBNAME@_la_DEPENDENCIES = $(pmpi_convenience_libs) $(abi_convenience_libs)
+
+endif !BUILD_PROFILING_LIB
+endif BUILD_ABI_LIB
+
+if BUILD_CXX_BINDING
+lib_LTLIBRARIES += lib/lib@MPICXXLIBNAME@.la
+lib_lib@MPICXXLIBNAME@_la_SOURCES = $(mpi_cxx_sources)
+lib_lib@MPICXXLIBNAME@_la_LDFLAGS = $(ABIVERSIONFLAGS)
+lib_lib@MPICXXLIBNAME@_la_LIBADD = lib/lib@MPILIBNAME@.la
+endif BUILD_CXX_BINDING
+
+# build the current directory and then the examples directory after everything else
+SUBDIRS += . @fortrandir@ examples
+
+testing:
+	( cd test && $(MAKE) $(AM_MAKEFLAGS) testing )
+
+testconfig:
+	( cd test && $(MAKE) $(AM_MAKEFLAGS) mpi/Makefile )
+
+test-clean:
+	( cd test && $(MAKE) $(AM_MAKEFLAGS) clean )
+
+# unit tests of internal routines, see doc/wiki/testing/Unit_Tests.md
+unit-testing:
+	CC="$(CC)" python3 $(top_srcdir)/test/units/run_unit.py
+
+## FIXME: this should live in src/env/Makefile.mk. Moving it there
+## will not cause a problem, but it will break the build if another
+## Makefile.mk also decides to create a install-exec-hook target. A
+## better approach might be to have each Makefile.mk append to a
+## common set of rules.
+install-exec-hook:
+	if test -e lib/lib@PMPILIBNAME@.la ; then \
+	    . lib/lib@PMPILIBNAME@.la ; \
+	elif test -e lib/lib@MPILIBNAME@.la ; then \
+	    . lib/lib@MPILIBNAME@.la ; \
+	fi ; \
+	for e in ${DESTDIR}${bindir}/@MPICC_NAME@ \
+		${DESTDIR}${bindir}/@MPICXX_NAME@ ; do \
+		if test -e $${e} ; then \
+			sed -e 's|__PREFIX_TO_BE_FILLED_AT_INSTALL_TIME__|${prefix}|g' \
+				-e 's|__EXEC_PREFIX_TO_BE_FILLED_AT_INSTALL_TIME__|${exec_prefix}|g' \
+				-e 's|__SYSCONFDIR_TO_BE_FILLED_AT_INSTALL_TIME__|${sysconfdir}|g' \
+				-e 's|__INCLUDEDIR_TO_BE_FILLED_AT_INSTALL_TIME__|${includedir}|g' \
+				-e 's|__LIBDIR_TO_BE_FILLED_AT_INSTALL_TIME__|${libdir}|g' \
+				-e "s|__LIBS_TO_BE_FILLED_AT_INSTALL_TIME__|$$dependency_libs|g" $${e} > $${e}.tmp ; \
+			$(INSTALL_SCRIPT) $${e}.tmp $${e} ; \
+			rm -f $${e}.tmp ; \
+		fi ; \
+	done ; \
+	if test -e ${DESTDIR}${bindir}/@MPICXX_NAME@ ; then \
+		if test "@MPICXX_NAME@" != "@MPICPP_NAME@" ; then \
+			cd ${DESTDIR}${bindir} && ln -f -s @MPICXX_NAME@ @MPICPP_NAME@ ; \
+		fi ; \
+	fi ;
+if BUILD_ABI_LIB
+	if test -e ${DESTDIR}${bindir}/@MPICC_NAME@ ; then \
+		if test "@MPICC_NAME@" != "@MPICC_ABI_NAME@" ; then \
+			cd ${DESTDIR}${bindir} && ln -f -s @MPICC_NAME@ @MPICC_ABI_NAME@ ; \
+		fi ; \
+	fi ; \
+	if test -e ${DESTDIR}${bindir}/@MPICXX_NAME@ ; then \
+		if test "@MPICXX_NAME@" != "@MPICXX_ABI_NAME@" ; then \
+			cd ${DESTDIR}${bindir} && ln -f -s @MPICXX_NAME@ @MPICXX_ABI_NAME@ ; \
+		fi ; \
+	fi ;
+endif BUILD_ABI_LIB
+if BUILD_MPICH_LIB
+	if test -e ${DESTDIR}${bindir}/@MPICC_NAME@ ; then \
+		if test "@MPICC_NAME@" != "@MPICC_MPICH_NAME@" ; then \
+			cd ${DESTDIR}${bindir} && ln -f -s @MPICC_NAME@ @MPICC_MPICH_NAME@ ; \
+		fi ; \
+	fi ; \
+	if test -e ${DESTDIR}${bindir}/@MPICXX_NAME@ ; then \
+		if test "@MPICXX_NAME@" != "@MPICXX_MPICH_NAME@" ; then \
+			cd ${DESTDIR}${bindir} && ln -f -s @MPICXX_NAME@ @MPICXX_MPICH_NAME@ ; \
+		fi ; \
+	fi ;
+endif BUILD_MPICH_LIB
+
+# the configure step checks for the 'lib' dir to decide whether a source
+# directory has been previously used for an in-path build before allowing a
+# VPATH build to continue
+distclean-local:
+	-rm -rf $(top_builddir)/lib
+	-rm -rf $(top_builddir)/bin
+	-rm -rf $(top_builddir)/include
+	-rm -rf $(top_builddir)/share
+
+# created by confdb/aclocal_cache.m4
+DISTCLEANFILES += config.system
+
+# we can only have one clean-local, so we hook into it via conditionally
+# defined variables in the dependencies section
+clean-local: $(CLEAN_LOCAL_TARGETS)
+
+uninstall-local:
+	for x in @MPICPP_NAME@ @MPIF90_NAME@ @MPIF77_NAME@ ; do \
+		rm -f ${DESTDIR}${bindir}/$$x ; \
+	done ; \
+	for x in @MPICC_ABI_NAME@ @MPICXX_ABI_NAME@ ; do \
+		rm -f ${DESTDIR}${bindir}/$$x ; \
+	done ; \
+	for x in @MPICC_MPICH_NAME@ @MPICXX_MPICH_NAME@ ; do \
+		rm -f ${DESTDIR}${bindir}/$$x ; \
+	done ; \
+	for x in mpl opa mpich fmpich mpichf90 mpichcxx ; do \
+		rm -f ${DESTDIR}${libdir}/lib$$x@SHLIB_EXT@ ; \
+	done
+
+# --------------------------------------------------------------------------
+#  coverage rules
+# --------------------------------------------------------------------------
+
+.PHONY: coverage
+
+if BUILD_COVERAGE
+
+# $(lib_lib@MPILIBNAME@_la_SOURCES) already contains $(mpi_sources)
+# We don't include the $(lib_lib@PMPILIBNAME@_la_SOURCES) here because of gcov's
+# inability to correctly handle multiple object files with the same source file.
+gcov_sources = $(lib_lib@MPILIBNAME@_la_SOURCES)
+
+# local var meaning (for profiling foo/bar/baz.c):
+#   dir=foo/bar
+#   bname=baz.c
+#   aux=baz
+#
+# Note that we delete all extra ".gcov" files that were not the direct goal,
+# even though they contain useful information.  A more robust solution is needed
+# in the long run, probably one that uses "--long-file-names --preserve-paths"
+# and some postprocessing in a perl script.
+#
+# Gcov has no good way to deal with source files that have been compiled twice
+# into two different object files, such as
+#   bcast.c --> {bcast.o,lib_libpmpi_la-bcast.o}
+# It still generates a bcast.c.gcov output for each object file.  Long file
+# names and preserved paths do not help with this problem.
+# What we can do in this case is to move the second files to a separate
+# directory, rename name, and run gcov on the new files.
+# For the web-based coverage reports, the gcov output for the two files
+# needs to be merged; see maint/gcovmerge .
+# To make it easier to re-run the coverage generation, we copy, rather than
+# move, when there are two object files for each source file.
+# A change to the build procedure broke this target.  This is a partial though
+# nearly complete fix to the broken build process.  The generated coverage
+# files after the fix appear mostly correct, though there appear to also be
+# errors in the gcov output itself (the format of this output changes
+# frequently).  However, the coverage analysis is still valuable and has
+# identified missing tests.
+#
+# The problem:
+#   The source file is foo.c
+#   gcov expects foo.o, foo.gcno, and foo.gcda files
+#   The MPICH build process, unfortunately, does not produce a foo.o file;
+#   instead, it produces a .libs/lib_lib@MPILIBNAME@_la-foo.o file (and
+#   similarly .libs/lib_lib@MPILIBNAME@_la_foo.gcno etc.
+#   This change broke this coverage target.  If further changes to the
+#   naming conventions for object files are made, make sure that the
+#   coverage target is also modified to correspond to those changes.
+#
+coverage:
+	@for file in $(gcov_sources) ; do \
+	    dir=`dirname $$file` ; \
+	    bname=`basename $$file` ; \
+	    aux=`echo $$bname | sed -e 's,\.*$$,,'` ; \
+	    sname=`echo $$bname | sed -e 's/\.[^\.]*$$//'` ;\
+	    if [ -s "$$dir/$$sname.o" ] ; then \
+	        echo "( $(GCOV) -b -f -o $$file $$file && mv $$bname.gcov $$dir )" ; \
+	        ( $(GCOV) -b -f -o $$file $$file && mv $$bname.gcov $$dir ) ; \
+	    elif [ -s "$$dir/lib_lib@MPILIBNAME@_la-$$sname.o" ] ; then \
+	        if [ ! -d $$dir-mpi ] ; then mkdir $$dir-mpi ; fi ; \
+		echo "Copying name-mangled files to $$dir-mpi" ; \
+		for pfile in $$dir/.libs/lib_lib@MPILIBNAME@_la-$$sname.* ; do \
+		     nfile=`echo $$pfile | sed -e 's/lib_lib@MPILIBNAME@_la-//'` ;\
+		     nfile=`basename $$nfile` ; \
+		     echo "cp -p $$pfile $$dir-mpi/$$nfile" ; \
+		     cp -p $$pfile $$dir-mpi/$$nfile ; \
+		done ; \
+		for pfile in $$dir/lib_lib@MPILIBNAME@_la-$$sname.o ; do \
+		     nfile=`echo $$pfile | sed -e 's/lib_lib@MPILIBNAME@_la-//'` ;\
+		     nfile=`basename $$nfile` ; \
+		     echo "( cd $$dir-mpi && $(GCOV) -b -f $$nfile )" ; \
+		     ( cd $$dir-mpi && $(GCOV) -b -f $$nfile ) ; \
+		     if [ ! -s $$dir-mpi/$$bname.gcov ] ; then \
+			echo "No $$bname.gcov file created" ;\
+		     else \
+		        mv $$dir-mpi/$$bname.gcov $$dir ; \
+		     fi ; \
+		done ; \
+	    else \
+		echo "Missing object file for source $$file" ; \
+	    fi ; \
+	    if [ -s "$$dir/lib_lib@PMPILIBNAME@_la-$$sname.o" ] ; then \
+	        if [ ! -d $$dir-pmpi ] ; then mkdir $$dir-pmpi ; fi ; \
+		echo "Copying name-mangled files to $$dir-pmpi" ; \
+		for pfile in $$dir/.libs/lib_lib@PMPILIBNAME@_la-$$sname.* ; do \
+		     nfile=`echo $$pfile | sed -e 's/lib_lib@PMPILIBNAME@_la-//'` ;\
+		     nfile=`basename $$nfile` ; \
+		     echo "cp -p $$pfile $$dir-pmpi/$$nfile" ; \
+		     cp -p $$pfile $$dir-pmpi/$$nfile ; \
+		done ; \
+		for pfile in $$dir/lib_lib@PMPILIBNAME@_la-$$sname.o ; do \
+		     nfile=`echo $$pfile | sed -e 's/lib_lib@PMPILIBNAME@_la-//'` ;\
+		     nfile=`basename $$nfile` ; \
+		     echo "( cd $$dir-pmpi && $(GCOV) -b -f $$nfile )" ; \
+		     ( cd $$dir-pmpi && $(GCOV) -b -f $$nfile ) ; \
+		     if [ -s $$dir/$$bname.gcov ] ; then \
+		         echo "gcovmerge $$dir-pmpi/$$bname.gcov $$dir/$$bname.gcov > $$dir/$$bname.gcov.merge" ; \
+		         $(srcdir)/maint/gcovmerge $$dir-pmpi/$$bname.gcov \
+				$$dir/$$bname.gcov > $$dir/$$bname.gcov.merge ;\
+		     else \
+			 echo "Did not find file $$dir/$$bname.gcov" ; \
+		         echo "mv $$dir-pmpi/$$bname.gcov $$dir/$$bname.gcov";\
+			 mv $$dir-pmpi/$$bname.gcov $$dir/$$bname.gcov ; \
+		     fi ;\
+		done ; \
+	    fi ; \
+	    rm -f *.gcov ; \
+	done
+	for subdir in $(SUBDIRS) - ; do \
+	    if test "x$$subdir" = "x-" ; then break ; fi ; \
+## SUBDIRS contains "."
+	    if test "x$$subdir" = "x." ; then \
+	        : ; \
+	    else \
+		if grep coverage: $$subdir/Makefile >/dev/null 2>&1 ; then  \
+	           ( cd $$subdir && $(MAKE) $(AM_MAKEFLAGS) coverage ) ; \
+		fi \
+	    fi \
+	done
+
+CLEAN_LOCAL_TARGETS += coverage-clean
+# heavy handed, but it gets the job done
+coverage-clean:
+	-find $(top_builddir) -name "*.gcda" -o -name "*.gcno" -o -name "*.gcov" | \
+	    xargs -n 10 rm -f
+
+else !BUILD_COVERAGE
+coverage:
+	@echo 'ERROR: MPICH was not configured with "--enable-coverage"'
+	exit 1
+endif !BUILD_COVERAGE
+
+# --------------------------------------------------------------------------
+#  documentation rules
+# --------------------------------------------------------------------------
+
+# Tell make (via the automake SUFFIXES var) that our phony suffixes exist and
+# should be considered when dissecting suffix-based implicit rules.  These phony
+# suffix files should NOT be added to a .PHONY target, otherwise make will not
+# use the implicit rules to attempt to build them.
+SUFFIXES += .man1-phony .html1-phony .man3-phony .html3-phony .adoc
+
+# "make V=1" support for our documentation recipes
+doctextman_verbose = $(doctextman_verbose_$(V))
+doctextman_verbose_ = $(doctextman_verbose_$(AM_DEFAULT_VERBOSITY))
+doctextman_verbose_0 = @echo "   ASCIIDOCMAN  " $@;
+doctexthtml_verbose = $(doctexthtml_verbose_$(V))
+doctexthtml_verbose_ = $(doctexthtml_verbose_$(AM_DEFAULT_VERBOSITY))
+doctexthtml_verbose_0 = @echo "   ASCIIDOCHTML  " $@;
+
+# build dir paths for doc generation, used to override subdir (esp. ROMIO) doc
+# generation locations/options
+mandoc_path1=$(abs_top_builddir)/man/man1
+mandoc_path3=$(abs_top_builddir)/man/man3
+htmldoc_path1=$(abs_top_builddir)/www/www1
+htmldoc_path3=$(abs_top_builddir)/www/www3
+# Provide an easily replaced url root for the generated index file.
+# You can override this with URL desired in the index file generated by doctext.
+# You can ignore this if you don't use mapnames or tohtml to add links
+# to the MPI manual pages to documents.
+htmldoc_root3="--your-url-here--"
+
+# Implicit suffix rules to cause the docs to be built.  These are a bit of a
+# hack, but using the implicit rules like this instead of a shell for loop
+# permits make -jN to work.
+
+.adoc.man1-phony:
+	$(doctextman_verbose)$(ASCIIDOC) -b manpage -D $(mandoc_path1) $<
+.adoc.html1-phony:
+	$(doctexthtml_verbose)$(ASCIIDOC) -b html5 -D $(htmldoc_path1) $<
+.adoc.man3-phony:
+	$(doctextman_verbose)$(ASCIIDOC) -b manpage -D $(mandoc_path3) $<
+.adoc.html3-phony:
+	$(doctexthtml_verbose)$(ASCIIDOC) -b html5 -D $(htmldoc_path3) $<
+
+# use mandoc-local target to force directory creation before running ASCIIDOC
+mandoc:
+	test -d $(mandoc_path1) || $(MKDIR_P) $(mandoc_path1)
+	test -d $(mandoc_path3) || $(MKDIR_P) $(mandoc_path3)
+	$(MAKE) $(AM_MAKEFLAGS) mandoc-local
+mandoc-local: $(doc1_src:.adoc=.man1-phony) \
+	$(doc3_src:.adoc=.man3-phony)
+	for subdir in $(MANDOC_SUBDIRS) - ; do \
+	    if test "x$$subdir" = "x-" ; then break ; fi ; \
+## MANDOC_SUBDIRS might accidentally contain "."
+	    if test "x$$subdir" = "x." ; then \
+	        : ; \
+	    else \
+		if grep 'mandoc:' $$subdir/Makefile >/dev/null 2>&1 ; then  \
+## make 'mandoc' in subdirectory but tell sub-make to output to the top-level
+	           ( cd $$subdir && $(MAKE) $(AM_MAKEFLAGS) \
+			mandoc_path1=$(mandoc_path1) \
+			mandoc_path3=$(mandoc_path3) \
+			mandoc ) ; \
+		fi \
+	    fi \
+	done
+	$(srcdir)/maint/alias_mancnst -srcdir=$(top_srcdir)
+
+# use htmldoc-local target to force directory creation before running ASCIIDOC
+# Note that the mpi.cit is appended to by each update, so it must be removed
+# and recreated when the documentation files are updated
+htmldoc:
+	test -d $(top_builddir)/www/www1 || $(MKDIR_P) $(top_builddir)/www/www1
+	test -d $(top_builddir)/www/www3 || $(MKDIR_P) $(top_builddir)/www/www3
+	rm -f $(htmldoc_path3)/mpi.cit
+	$(MAKE) $(AM_MAKEFLAGS) htmldoc-local
+
+htmldoc-local: $(doc1_src:.adoc=.html1-phony) \
+	$(doc3_src:.adoc=.html3-phony)
+	for subdir in $(HTMLDOC_SUBDIRS) - ; do \
+	    if test "x$$subdir" = "x-" ; then break ; fi ; \
+## HTMLDOC_SUBDIRS might accidentally contain "."
+	    if test "x$$subdir" = "x." ; then \
+	        : ; \
+	    else \
+		if grep 'htmldoc:' $$subdir/Makefile >/dev/null 2>&1 ; then  \
+## make 'htmldoc' in subdirectory but tell sub-make to output to the top-level
+	           ( cd $$subdir && $(MAKE) $(AM_MAKEFLAGS) \
+			htmldoc_path1=$(htmldoc_path1) \
+			htmldoc_path3=$(htmldoc_path3) \
+			htmldoc ) ; \
+		fi \
+	    fi \
+	done
+	$(srcdir)/maint/createhtmlindex -wwwroot=$(top_builddir) -srcdir=$(top_srcdir)
+
+# install-man does not have a special "-local" target for some reason
+if INSTALL_DOCS
+INSTALL_DATA_LOCAL_TARGETS += install-man-local
+endif
+# this is a variation on the recipe that was previously generated by simplemake
+install-man-local:
+	@dir= ; \
+	if test -d $(builddir)/man ; then \
+	 dir=$(builddir)/man ; \
+	elif test -d $(srcdir)/man ; then \
+	 dir=$(srcdir)/man ; \
+	fi ; \
+	export dir ; \
+	if test ! -z $$dir && test -d $$dir && cd $$dir ; then \
+	 for name in * ; do \
+	  if [ "$$name" = "*" ] ; then continue ; fi ; \
+	  if [ -f $$name ] ; then \
+	    echo "$(INSTALL_DATA) $$name ${DESTDIR}${mandir}/$$name" ; \
+	    $(INSTALL_DATA) $$name ${DESTDIR}${mandir}/$$name ; \
+	  elif [ -d $$name ] ; then \
+	    if [ ! -d ${DESTDIR}${mandir}/$$name ] ; then $(MKDIR_P) ${DESTDIR}${mandir}/$$name ; fi ;\
+	    ( cd $$name && for name2 in * ; do \
+	        if [ "$$name2" = "*" ] ; then continue ; fi ; \
+	        if [ -f $$name2 ] ; then \
+	            echo "$(INSTALL_DATA) $$name2 ${DESTDIR}${mandir}/$$name/$$name2" ; \
+	            $(INSTALL_DATA) $$name2 ${DESTDIR}${mandir}/$$name/$$name2 ; \
+	        elif [ -d $$name2 ] ; then  \
+	            echo "cp -rp $$name2 ${DESTDIR}${mandir}/$$name" ; \
+	            cp -rp $$name2 ${DESTDIR}${mandir}/$$name ; \
+	        fi \
+	    done ) ; \
+	  else \
+	    echo "Unknown file type for $$name" ; \
+	  fi ; \
+	 done ; \
+	fi
+
+if INSTALL_DOCS
+INSTALL_DATA_LOCAL_TARGETS += install-html-local
+endif
+install-html-local:
+	@dir= ; \
+	if test -d $(builddir)/www ; then \
+	 dir=$(builddir)/www ; \
+	elif test -d $(srcdir)/www ; then \
+	 dir=$(srcdir)/www ; \
+	fi ; \
+	export dir ; \
+	if test ! -z $$dir && test -d $$dir && cd $$dir ; then \
+	 if [ ! -e ${DESTDIR}${htmldir} ] ; then $(MKDIR_P) ${DESTDIR}${htmldir} ; fi ; \
+	 for name in * ; do \
+	  if [ "$$name" = "*" ] ; then continue ; fi ; \
+	  if [ -f $$name ] ; then \
+	    echo "$(INSTALL_DATA) $$name ${DESTDIR}${htmldir}/$$name" ; \
+	    $(INSTALL_DATA) $$name ${DESTDIR}${htmldir}/$$name ; \
+	  elif [ -d $$name ] ; then \
+	    if [ ! -d ${DESTDIR}${htmldir}/$$name ] ; then $(MKDIR_P) ${DESTDIR}${htmldir}/$$name ; fi ;\
+	    ( cd $$name && for name2 in * ; do \
+	        if [ "$$name2" = "*" ] ; then continue ; fi ; \
+	        if [ -f $$name2 ] ; then \
+	            echo "$(INSTALL_DATA) $$name2 ${DESTDIR}${htmldir}/$$name/$$name2" ; \
+	            $(INSTALL_DATA) $$name2 ${DESTDIR}${htmldir}/$$name/$$name2 ; \
+	        elif [ -d $$name2 ] ; then  \
+	            echo "cp -rp $$name2 ${DESTDIR}${htmldir}/$$name" ; \
+	            cp -rp $$name2 ${DESTDIR}${htmldir}/$$name ; \
+	        fi \
+	    done ) ; \
+	  else \
+	    echo "Unknown file type for $$name" ; \
+	  fi ; \
+	 done ; \
+	fi
+
+.PHONY: mandoc mandoc-local htmldoc htmldoc-local install-html-local install-man-local
+
+# build the latex docs in the old style
+latexdoc:
+	for dir in $(DOC_SUBDIRS) ; do \
+		(cd $$dir && ${MAKE} latexdoc ) ; done
+
+# install-pdf will not be run by default in a "make install" unless we do this
+if INSTALL_DOCS
+INSTALL_DATA_LOCAL_TARGETS += install-pdf-local
+endif
+# note that these PDFs are currently built in the srcdir, even in a VPATH
+# build...
+install-pdf-local:
+	if [ ! -e ${DESTDIR}${docdir} ] ; then $(MKDIR_P) ${DESTDIR}${docdir} ; fi
+	if [ -s $(srcdir)/doc/userguide/user.pdf ] ; then $(INSTALL_DATA) $(srcdir)/doc/userguide/user.pdf ${DESTDIR}${docdir}/user.pdf ; fi
+	if [ -s $(srcdir)/doc/installguide/install.pdf ] ; then $(INSTALL_DATA) $(srcdir)/doc/installguide/install.pdf ${DESTDIR}${docdir}/install.pdf ; fi
+	if [ -s $(srcdir)/doc/logging/logging.pdf ] ; then $(INSTALL_DATA) $(srcdir)/doc/logging/logging.pdf ${DESTDIR}${docdir}/logging.pdf ; fi
+
+include $(top_srcdir)/doc/Makefile.mk
+
+# use the _TARGETS var as a workaround for being unable to define multiple
+# -local targets
+install-data-local: $(INSTALL_DATA_LOCAL_TARGETS)
+
+# the dist target created by automake won't work. Direct user to use release.pl
+dist:
+	@echo "To create release tarball, use:" ; \
+	echo "    maint/release.pl --branch=[git_ref_to_use] --version=[version] --git-repo=[path_to_git_repository]"
+
+
+# sometimes helpful when debugging macros to see the preprocessed output.
+# Also using '-CC' because comments provide useful landmarks
+
+SUFFIXES += .i
+
+.c.i:
+	$(COMPILE) -CC -E -o $@ $<

@@ -1,0 +1,79 @@
+# vim: set ft=c:
+
+MPI_Attr_delete:
+    .desc: Deletes an attribute value associated with a key on a communicator
+    .replace: deprecated with MPI_Comm_delete_attr
+
+MPI_Attr_get:
+    .desc: Retrieves attribute value by key
+    .replace: deprecated with MPI_Comm_get_attr
+    .seealso: MPI_Attr_put, MPI_Keyval_create, MPI_Attr_delete, MPI_Comm_get_attr
+
+MPI_Attr_put:
+    .desc: Stores attribute value associated with a key
+    .replace: deprecated with MPI_Comm_set_attr
+    .seealso: MPI_Attr_get, MPI_Keyval_create, MPI_Attr_delete, MPI_Comm_set_attr
+
+MPI_Keyval_create:
+    .desc: Creates a new attribute key
+    .replace: deprecated with MPI_Comm_create_keyval
+    .seealso: MPI_Keyval_free, MPI_Comm_create_keyval
+
+MPI_Keyval_free:
+    .desc: Frees an attribute key for communicators
+    .seealso: MPI_Keyval_create, MPI_Comm_free_keyval
+    .replace: deprecated with MPI_Comm_free_keyval
+
+MPI_Comm_create_keyval:
+    .desc: Create a new attribute key
+    .docnotes: AttrErrReturn
+    .seealso: MPI_Comm_free_keyval
+
+MPI_Comm_delete_attr:
+    .desc: Deletes an attribute value associated with a key on a communicator
+    .seealso: MPI_Comm_set_attr, MPI_Comm_create_keyval
+    .extra: ignore_revoked_comm
+
+MPI_Comm_free_keyval:
+    .desc: Frees an attribute key for communicators
+
+MPI_Comm_get_attr:
+    .desc: Retrieves attribute value by key
+    .extra: ignore_revoked_comm
+
+MPI_Comm_set_attr:
+    .desc: Stores attribute value associated with a key
+    .seealso: MPI_Comm_create_keyval, MPI_Comm_delete_attr
+    .extra: ignore_revoked_comm
+
+MPI_Type_create_keyval:
+    .desc: Create an attribute keyval for MPI datatypes
+    .docnotes: AttrErrReturn
+
+MPI_Type_delete_attr:
+    .desc: Deletes an attribute value associated with a key on a datatype
+
+MPI_Type_free_keyval:
+    .desc: Frees an attribute key for datatypes
+
+MPI_Type_get_attr:
+    .desc: Retrieves attribute value by key
+
+MPI_Type_set_attr:
+    .desc: Stores attribute value associated with a key
+
+MPI_Win_create_keyval:
+    .desc: Create an attribute keyval for MPI window objects
+    .docnotes: AttrErrReturn
+
+MPI_Win_delete_attr:
+    .desc: Deletes an attribute value associated with a key on a window
+
+MPI_Win_free_keyval:
+    .desc: Frees an attribute key for MPI RMA windows
+
+MPI_Win_get_attr:
+    .desc: Get attribute cached on an MPI window object
+
+MPI_Win_set_attr:
+    .desc: Stores attribute value associated with a key
