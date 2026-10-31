@@ -29,6 +29,11 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends autoconf automake libtool pkg-config gfortran python3 libhwloc-dev libnuma-dev
 
+      - name: Check reproducer syntax before costly MPICH build
+        run: |
+          gcc -std=c11 -O1 -Wall -Wextra -Werror -pthread -Isrc/pmi/include \
+            -fsyntax-only research/hydra/pmi_lifecycle.c
+
       - name: Build full upstream MPICH snapshot
         run: |
           ./autogen.sh > research/hydra/results/autogen.log 2>&1 || { tail -n 100 research/hydra/results/autogen.log; exit 1; }
@@ -44,9 +49,10 @@ jobs:
       - name: Compile real PMI2 API reproducer
         run: |
           gcc -std=c11 -O1 -g -Wall -Wextra -Werror -pthread \
-            -I"$RUNNER_TEMP/mpich/include" research/hydra/pmi_lifecycle.c \
-            -L"$RUNNER_TEMP/mpich/lib" -Wl,-rpath,"$RUNNER_TEMP/mpich/lib" \
-            -lpmi -o research/hydra/pmi_lifecycle
+            -Isrc/pmi/include -I"$RUNNER_TEMP/mpich/include" research/hydra/pmi_lifecycle.c \
+            -Lsrc/pmi/.libs -L"$RUNNER_TEMP/mpich/lib" \
+            -Wl,-rpath,"$RUNNER_TEMP/mpich/lib" -lpmi -lmpi \
+            -o research/hydra/pmi_lifecycle
 
       - name: Healthy PMI2 control
         run: |
