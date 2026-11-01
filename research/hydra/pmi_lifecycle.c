@@ -78,8 +78,8 @@ static void *blocking_get(void *arg)
 
 int main(int argc, char **argv)
 {
-    if (argc != 2 || (strcmp(argv[1], "control") && strcmp(argv[1], "fault") && strcmp(argv[1], "fault-no-wait"))) {
-        fprintf(stderr, "usage: %s control|fault|fault-no-wait\n", argv[0]); return 2;
+    if (argc != 2 || (strcmp(argv[1], "control") && strcmp(argv[1], "fault") && strcmp(argv[1], "fault-no-wait") && strcmp(argv[1], "fault-two-waiters"))) {
+        fprintf(stderr, "usage: %s control|fault|fault-no-wait|fault-two-waiters\n", argv[0]); return 2;
     }
     signal(SIGUSR1, SIG_IGN);
 
@@ -139,6 +139,22 @@ int main(int argc, char **argv)
         rc = PMI2_Finalize();
         printf("FAULT_PUT_DONE rc=%d\n", rc);
         return rc ? 13 : 0;
+    }
+
+    if (!strcmp(argv[1], "fault-two-waiters")) {
+        /* This rank must remain queued after the disconnected rank's
+         * request is canceled. Both wait on the same attribute key. */
+        char value[128] = {0};
+        int found = 0;
+        printf("SURVIVING_WAITER_WAIT rank=%d\n", rank);
+        rc = PMI2_Info_GetNodeAttr("mpich_research_attr", value,
+                                   sizeof(value), &found, 1);
+        printf("SURVIVING_WAITER_GET rc=%d found=%d value=%s\n", rc, found, value);
+        if (rc || !found || strcmp(value, "ready"))
+            return 16;
+        rc = PMI2_Finalize();
+        printf("SURVIVING_WAITER_DONE rc=%d\n", rc);
+        return rc ? 17 : 0;
     }
 
     delay_ms(2300);
