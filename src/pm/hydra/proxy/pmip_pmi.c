@@ -61,7 +61,7 @@ static HYD_status HYD_pmcd_pmi_v2_queue_req(struct pmip_downstream *p, struct PM
         if (n > 0 && n < (int) sizeof(trace_path)) {
             FILE *trace = fopen(trace_path, "a");
             if (trace) {
-                fprintf(trace, "%d\\n", p->pmi_rank);
+                fprintf(trace, "%d\n", p->pmi_rank);
                 fclose(trace);
             }
         }
