@@ -20,6 +20,197 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
+      - name: PR preflight - source diff whitespace and changed-file audit
+        run: |
+          git fetch --no-tags --depth=1 origin main
+          git diff --check origin/main...HEAD
+          git diff --name-only origin/main...HEAD | tee /tmp/mpich-research-changed-files.txt
+          if git diff --name-only origin/main...HEAD | grep -Ev '^((src/pm/hydra/proxy/(pmip_pmi\.c|pmip_pmi\.h|pmip_cb\.c))|(research/hydra/pmi_lifecycle\.c)|(\.github/workflows/hydra-research\.yml))        run: |
+          test -f src/pm/hydra/proxy/pmip_cb.c
+          test -f src/pmi/include/pmi2.h
+          test -f research/hydra/pmi_lifecycle.c
+          mkdir -p research/hydra/results
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends autoconf automake libtool pkg-config gfortran python3 libhwloc-dev libnuma-dev
+
+      - name: Check reproducer syntax before costly MPICH build
+        run: |
+          gcc -std=c11 -O1 -Wall -Wextra -Werror -pthread -Isrc/pmi/include \
+            -fsyntax-only research/hydra/pmi_lifecycle.c
+
+      - name: Bootstrap and configure MPICH
+        run: |
+          ./autogen.sh > research/hydra/results/autogen.log 2>&1 || { tail -n 100 research/hydra/results/autogen.log; exit 1; }
+          CFLAGS="-DHYDRA_RESEARCH_QUEUE_TRACE" ./configure --prefix="$RUNNER_TEMP/mpich" --with-pm=hydra \
+            --with-device=ch4:ofi --with-libfabric=embedded \
+            --with-yaksa=embedded --with-mpl=embedded \
+            --with-hwloc=embedded --disable-fortran --disable-cxx \
+            --disable-doc --disable-dependency-tracking \
+            > research/hydra/results/configure.log 2>&1 || { tail -n 100 research/hydra/results/configure.log; exit 1; }
+
+      - name: Build only PMI and MPL before full MPICH
+        run: |
+          make -C src/mpl -j 2 > research/hydra/results/mpl.log 2>&1 || { tail -n 100 research/hydra/results/mpl.log; exit 1; }
+          make -C src/pmi -j 2 > research/hydra/results/pmi.log 2>&1 || { tail -n 100 research/hydra/results/pmi.log; exit 1; }
+          test -f src/pmi/libpmi.la
+          test -f src/mpl/libmpl.la
+
+      - name: Link real PMI2 harness with libtool (early fail gate)
+        run: |
+          ./libtool --mode=link gcc -std=c11 -O1 -g -Wall -Wextra -Werror -pthread \
+            -Isrc/pmi/include research/hydra/pmi_lifecycle.c \
+            src/pmi/libpmi.la src/mpl/libmpl.la -ldl -lm \
+            -o research/hydra/pmi_lifecycle \
+            > research/hydra/results/harness-link.log 2>&1 || {
+              tail -n 100 research/hydra/results/harness-link.log
+              exit 1
+            }
+          test -x research/hydra/pmi_lifecycle
+          echo 'PMI2 HARNESS LINK PASS'
+
+      - name: Build and install full upstream MPICH snapshot
+        run: |
+          make -j 2 > research/hydra/results/build.log 2>&1 || { tail -n 100 research/hydra/results/build.log; exit 1; }
+          make install > research/hydra/results/install.log 2>&1 || { tail -n 100 research/hydra/results/install.log; exit 1; }
+
+      - name: Compile upstream-native PMI-1 and PMI-2 tests
+        run: |
+          for version in 1 2; do
+            ./libtool --mode=link gcc -O1 -g -Wall -Wextra \
+              -Wno-unused-parameter -Isrc/pmi/include \
+              "test/mpi/impls/pmi/test_pmi${version}.c" \
+              src/pmi/libpmi.la src/mpl/libmpl.la -ldl -lm \
+              -o "research/hydra/test_pmi${version}" \
+              > "research/hydra/results/native-pmi${version}-link.log" 2>&1 || {
+                tail -n 100 "research/hydra/results/native-pmi${version}-link.log"
+                exit 1
+              }
+            test -x "research/hydra/test_pmi${version}"
+          done
+
+      - name: Run upstream-native PMI-1 and PMI-2 tests
+        run: |
+          export PATH="$RUNNER_TEMP/mpich/bin:$PATH"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/mpich/lib:${LD_LIBRARY_PATH:-}"
+          for version in 1 2; do
+            set -o pipefail
+            timeout -k 3s 40s mpiexec -n 2 "./research/hydra/test_pmi${version}" \
+              2>&1 | tee "research/hydra/results/native-pmi${version}.log"
+            grep -q 'No Errors' "research/hydra/results/native-pmi${version}.log"
+            echo "NATIVE_PMI_${version}=PASS"
+          done
+
+      - name: Healthy PMI2 control
+        run: |
+          export PATH="$RUNNER_TEMP/mpich/bin:$PATH"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/mpich/lib:${LD_LIBRARY_PATH:-}"
+          export PMI_RESEARCH_DIR="$(mktemp -d)"
+          set -o pipefail
+          timeout -k 3s 30s mpiexec -n 2 ./research/hydra/pmi_lifecycle control \
+            2>&1 | tee research/hydra/results/control.log
+          grep -q 'CONTROL_GET rc=0 found=1 value=ready' research/hydra/results/control.log
+          test "$(grep -c 'CONTROL_DONE rank=' research/hydra/results/control.log)" -eq 2
+
+      - name: Forced-exit negative control (no pending PMI request)
+        run: |
+          export PATH="$RUNNER_TEMP/mpich/bin:$PATH"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/mpich/lib:${LD_LIBRARY_PATH:-}"
+          export PMI_RESEARCH_DIR="$(mktemp -d)"
+          set +e
+          timeout -k 3s 30s mpiexec -disable-auto-cleanup -n 3 \
+            ./research/hydra/pmi_lifecycle fault-no-wait \
+            > research/hydra/results/no-wait.log 2>&1
+          result=$?
+          set -e
+          cat research/hydra/results/no-wait.log
+          echo "mpiexec_status=$result" | tee -a research/hydra/results/no-wait.log
+          if [ "$result" -eq 124 ]; then
+            echo "::error::Negative control timed out"
+            exit 1
+          fi
+          grep -q '^KILL_WAITER pid=' research/hydra/results/no-wait.log
+          grep -q 'FAULT_PUT_DONE rc=0' research/hydra/results/no-wait.log
+          grep -q 'SURVIVOR_DONE rc=0' research/hydra/results/no-wait.log
+          echo 'negative_control=survivors_completed_without_pending_request'
+
+      - name: Fault-lifecycle experiment - 3 repetitions, server-side queued-state proof
+        run: |
+          export PATH="$RUNNER_TEMP/mpich/bin:$PATH"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/mpich/lib:${LD_LIBRARY_PATH:-}"
+          for attempt in 1 2 3; do
+            export PMI_RESEARCH_DIR="$(mktemp -d)"
+            logfile="research/hydra/results/fault-${attempt}.log"
+            set +e
+            timeout -k 3s 30s mpiexec -disable-auto-cleanup -n 3 \
+              ./research/hydra/pmi_lifecycle fault > "$logfile" 2>&1
+            result=$?
+            set -e
+            cat "$logfile"
+            echo "mpiexec_status=$result" | tee -a "$logfile"
+            cp "$PMI_RESEARCH_DIR/queued.log" "research/hydra/results/fault-${attempt}-queued.log"
+            grep -q '^0$' "research/hydra/results/fault-${attempt}-queued.log"
+            grep -q '^QUEUED_CONFIRMED ranks=0$' "$logfile"
+            grep -q 'SURVIVOR_DONE rc=0' "$logfile"
+            grep -q '^KILL_WAITER pid=' "$logfile"
+            grep -q 'FAULT_PUT_DONE rc=0' "$logfile"
+            if [ "$result" -eq 124 ] || [ "$result" -eq 255 ]; then
+              echo "::error::PMI2 lifecycle regression (status $result)"
+              exit 1
+            fi
+            if grep -q 'Bad file descriptor' "$logfile"; then
+              echo "::error::Stale PMI FD write"
+              exit 1
+            fi
+            echo "fault_attempt_${attempt}=PASS"
+          done
+
+      - name: Two queued PMI2 waiters - cancel only disconnected owner - 3 repetitions, server-side queued-state proof
+        run: |
+          export PATH="$RUNNER_TEMP/mpich/bin:$PATH"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/mpich/lib:${LD_LIBRARY_PATH:-}"
+          for attempt in 1 2 3; do
+            export PMI_RESEARCH_DIR="$(mktemp -d)"
+            logfile="research/hydra/results/two-waiters-${attempt}.log"
+            set +e
+            timeout -k 3s 30s mpiexec -disable-auto-cleanup -n 3 \
+              ./research/hydra/pmi_lifecycle fault-two-waiters > "$logfile" 2>&1
+            result=$?
+            set -e
+            cat "$logfile"
+            echo "mpiexec_status=$result" | tee -a "$logfile"
+            cp "$PMI_RESEARCH_DIR/queued.log" "research/hydra/results/two-waiters-${attempt}-queued.log"
+            grep -q '^0$' "research/hydra/results/two-waiters-${attempt}-queued.log"
+            grep -q '^2$' "research/hydra/results/two-waiters-${attempt}-queued.log"
+            grep -q '^QUEUED_CONFIRMED ranks=0,2$' "$logfile"
+            grep -q 'SURVIVING_WAITER_GET rc=0 found=1 value=ready' "$logfile"
+            grep -q 'SURVIVING_WAITER_DONE rc=0' "$logfile"
+            grep -q '^KILL_WAITER pid=' "$logfile"
+            grep -q 'FAULT_PUT_DONE rc=0' "$logfile"
+            if [ "$result" -eq 124 ] || [ "$result" -eq 255 ]; then
+              echo "::error::PMI2 lifecycle regression (status $result)"
+              exit 1
+            fi
+            if grep -q 'Bad file descriptor' "$logfile"; then
+              echo "::error::Stale PMI FD write"
+              exit 1
+            fi
+            echo "two-waiters_attempt_${attempt}=PASS"
+          done
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpich-hydra-pmi-evidence
+          path: research/hydra/results/
+          retention-days: 7
+          if-no-files-found: ignore
+; then
+            echo "::error::Unexpected changed file"
+            exit 1
+          fi
+          echo 'SOURCE_DIFF_CHECK=PASS'
+
       - name: Prepare environment
         run: |
           test -f src/pm/hydra/proxy/pmip_cb.c
