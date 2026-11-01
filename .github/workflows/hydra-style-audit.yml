@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Johnny-Kao/mpich
-          ref: 47177894dff2a8a9bb9542385355dde6eaa9209d
+          ref: 6a4ddedea506b46ca36427b83eb32377d867af65
           path: mpich
           persist-credentials: false
       - name: Build project's required GNU indent 2.2.11
