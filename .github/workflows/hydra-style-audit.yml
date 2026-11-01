@@ -1,0 +1,54 @@
+name: Hydra Staging style audit (GNU indent 2.2.11)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  style:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact Staging candidate
+        uses: actions/checkout@v4
+        with:
+          repository: Johnny-Kao/mpich
+          ref: 2b4596da5b3e79bc063c989d0517fc7bf1cfa1ee
+          path: mpich
+          persist-credentials: false
+      - name: Build project's required GNU indent 2.2.11
+        run: |
+          set -euo pipefail
+          curl -fLsS --retry 2 https://ftp.gnu.org/gnu/indent/indent-2.2.11.tar.gz -o "$RUNNER_TEMP/indent.tar.gz"
+          tar -xzf "$RUNNER_TEMP/indent.tar.gz" -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP/indent-2.2.11"
+          ./configure --prefix="$RUNNER_TEMP/indent-prefix" > "$RUNNER_TEMP/indent-configure.log"
+          make -C src -j2 > "$RUNNER_TEMP/indent-build.log" 2>&1 || { tail -n 80 "$RUNNER_TEMP/indent-build.log"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/indent-prefix/bin"
+          cp src/indent "$RUNNER_TEMP/indent-prefix/bin/indent"
+          "$RUNNER_TEMP/indent-prefix/bin/indent" --version | grep -q 'GNU indent 2.2.11'
+          echo "INDENT_2211_BUILD=PASS"
+      - name: MPICH code-cleanup.bash on changed C and H files (read-only audit)
+        working-directory: mpich
+        run: |
+          set -euo pipefail
+          export PATH="$RUNNER_TEMP/indent-prefix/bin:$PATH"
+          indent --version
+          for file in \
+            src/pm/hydra/proxy/pmip_pmi.c \
+            src/pm/hydra/proxy/pmip_pmi.h \
+            src/pm/hydra/proxy/pmip_cb.c \
+            test/mpi/impls/pmi/test_pmi2_nodeattr.c; do
+            maint/code-cleanup.bash "$file"
+          done
+          git diff --stat
+          git diff -- src/pm/hydra/proxy/pmip_pmi.c src/pm/hydra/proxy/pmip_pmi.h src/pm/hydra/proxy/pmip_cb.c test/mpi/impls/pmi/test_pmi2_nodeattr.c | head -n 200 || true
+          if ! git diff --quiet; then
+            echo 'STYLE_AUDIT=REVISE; formatting changes required before PR.'
+            exit 1
+          fi
+          echo 'STYLE_AUDIT=PASS; matches GNU indent 2.2.11 project cleanup.'
