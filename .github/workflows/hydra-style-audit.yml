@@ -30,7 +30,9 @@ jobs:
           make -C src -j2 > "$RUNNER_TEMP/indent-build.log" 2>&1 || { tail -n 80 "$RUNNER_TEMP/indent-build.log"; exit 1; }
           mkdir -p "$RUNNER_TEMP/indent-prefix/bin"
           cp src/indent "$RUNNER_TEMP/indent-prefix/bin/indent"
-          "$RUNNER_TEMP/indent-prefix/bin/indent" --version | grep -q 'GNU indent 2.2.11'
+          version="$("$RUNNER_TEMP/indent-prefix/bin/indent" --version 2>&1 || true)"
+          printf 'GNU indent build version: %s\n' "$version"
+          case "$version" in *2.2.11*) ;; *) echo "::error::Unexpected GNU indent version"; exit 1;; esac
           echo "INDENT_2211_BUILD=PASS"
       - name: MPICH code-cleanup.bash on changed C and H files (read-only audit)
         working-directory: mpich
