@@ -61,6 +61,27 @@ static HYD_status HYD_pmcd_pmi_v2_queue_req(struct pmip_downstream *p, struct PM
     goto fn_exit;
 }
 
+
+/* A PMI socket may close while a getnodeattr(wait=true) request is pending.
+ * Drop only requests owned by that downstream before its fd is closed.
+ */
+void PMIP_pmi_cancel_pending_reqs(struct pmip_downstream *p)
+{
+    struct HYD_pmcd_pmi_v2_reqs **next = &pending_reqs;
+
+    while (*next) {
+        struct HYD_pmcd_pmi_v2_reqs *req = *next;
+        if (req->downstream_ptr == p) {
+            *next = req->next;
+            PMIU_cmd_free(req->pmi);
+            MPL_free((void *) req->key);
+            MPL_free(req);
+        } else {
+            next = &req->next;
+        }
+    }
+}
+
 /* check pending kvs get when we get fn_info_putnodeattr */
 static HYD_status poke_progress(const char *key)
 {
@@ -104,6 +125,7 @@ static HYD_status poke_progress(const char *key)
 
             /* Free the dequeued request */
             PMIU_cmd_free(req->pmi);
+            MPL_free((void *) req->key);
             MPL_free(req);
         }
     }
