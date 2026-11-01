@@ -1,0 +1,124 @@
+name: Hydra PMI2 in-tree fault test - upstream red versus Staging green
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pmi2-fault-regression:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [upstream-baseline, staging-fix]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+        working-directory: mpich
+    steps:
+      - name: Checkout exact Staging with in-tree regression test
+        uses: actions/checkout@v4
+        with:
+          repository: Johnny-Kao/mpich
+          ref: 47177894dff2a8a9bb9542385355dde6eaa9209d
+          path: mpich
+          fetch-depth: 6
+          persist-credentials: false
+
+      - name: Verify code provenance and select upstream baseline
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 47177894dff2a8a9bb9542385355dde6eaa9209d
+          git cat-file -e 623ce38a4e9c37a52cb901db6befaa89a9819586^{commit}
+          grep -Fx 'test_pmi2_nodeattr_fault 3 mpiexecarg=-disable-auto-cleanup mpiexecarg=-ppn mpiexecarg=3 resultTest=TestStatusNoErrors strict=false timeLimit=20' test/mpi/impls/pmi/testlist
+          if [ "$VARIANT" = upstream-baseline ]; then
+            git restore --source=623ce38a4e9c37a52cb901db6befaa89a9819586 -- \
+              src/pm/hydra/proxy/pmip_pmi.c \
+              src/pm/hydra/proxy/pmip_pmi.h \
+              src/pm/hydra/proxy/pmip_cb.c
+            echo 'PRODUCT=UNMODIFIED_UPSTREAM'
+          else
+            echo 'PRODUCT=CLEAN_STAGING'
+          fi
+          test ! -e src/pm/hydra/proxy/.research-trace
+          ! grep -R 'HYDRA_RESEARCH_QUEUE_TRACE' src/pm/hydra/proxy
+          git diff --check
+          mkdir -p "$GITHUB_WORKSPACE/evidence"
+
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends autoconf automake libtool pkg-config gfortran python3 libhwloc-dev libnuma-dev
+
+      - name: Configure Hydra from full MPICH source
+        run: |
+          ./autogen.sh > "$GITHUB_WORKSPACE/evidence/autogen.log" 2>&1 || { tail -n 100 "$GITHUB_WORKSPACE/evidence/autogen.log"; exit 1; }
+          ./configure --prefix="$RUNNER_TEMP/mpich" --with-pm=hydra \
+            --with-device=ch4:ofi --with-libfabric=embedded \
+            --with-yaksa=embedded --with-mpl=embedded \
+            --with-hwloc=embedded --disable-fortran --disable-cxx \
+            --disable-doc --disable-dependency-tracking \
+            > "$GITHUB_WORKSPACE/evidence/configure.log" 2>&1 || { tail -n 100 "$GITHUB_WORKSPACE/evidence/configure.log"; exit 1; }
+
+      - name: Build native PMI library and the regression program
+        run: |
+          make -C src/mpl -j 2 > "$GITHUB_WORKSPACE/evidence/mpl.log" 2>&1 || { tail -n 80 "$GITHUB_WORKSPACE/evidence/mpl.log"; exit 1; }
+          make -C src/pmi -j 2 > "$GITHUB_WORKSPACE/evidence/pmi.log" 2>&1 || { tail -n 80 "$GITHUB_WORKSPACE/evidence/pmi.log"; exit 1; }
+          ./libtool --mode=link gcc -std=c11 -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter \
+            -Isrc/pmi/include test/mpi/impls/pmi/test_pmi2_nodeattr_fault.c \
+            src/pmi/libpmi.la src/mpl/libmpl.la -ldl -lm \
+            -o ./test_pmi2_nodeattr_fault \
+            > "$GITHUB_WORKSPACE/evidence/fault-link.log" 2>&1 || { tail -n 100 "$GITHUB_WORKSPACE/evidence/fault-link.log"; exit 1; }
+          test -x test_pmi2_nodeattr_fault
+
+      - name: Build full MPICH and Hydra, then install
+        run: |
+          make -j 2 > "$GITHUB_WORKSPACE/evidence/build.log" 2>&1 || { tail -n 100 "$GITHUB_WORKSPACE/evidence/build.log"; exit 1; }
+          make install > "$GITHUB_WORKSPACE/evidence/install.log" 2>&1 || { tail -n 100 "$GITHUB_WORKSPACE/evidence/install.log"; exit 1; }
+
+      - name: Exercise same in-tree regression three times on each variant
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          export PATH="$RUNNER_TEMP/mpich/bin:$PATH"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/mpich/lib:${LD_LIBRARY_PATH:-}"
+          for attempt in 1 2 3; do
+            log="$GITHUB_WORKSPACE/evidence/fault-${attempt}.log"
+            set +e
+            timeout -k 3s 25s mpiexec -disable-auto-cleanup -ppn 3 -n 3 \
+              ./test_pmi2_nodeattr_fault > "$log" 2>&1
+            code=$?
+            set -e
+            echo "attempt=${attempt} variant=${VARIANT} exit=${code}"
+            cat "$log"
+            if [ "$code" = 124 ] || [ "$code" = 137 ]; then
+              echo "::error::Timed out or killed externally"
+              exit 1
+            fi
+            if [ "$VARIANT" = staging-fix ]; then
+              test "$code" -eq 9
+              grep -q '^No Errors$' "$log"
+              if grep -q 'Bad file descriptor' "$log"; then exit 1; fi
+              echo "STAGING_GREEN_${attempt}=PASS"
+            else
+              test "$code" -eq 255
+              grep -q 'Bad file descriptor' "$log"
+              ! grep -q '^No Errors$' "$log"
+              echo "UPSTREAM_RED_${attempt}=CONFIRMED"
+            fi
+          done
+
+      - name: Upload all logs for review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hydra-in-tree-fault-${{ matrix.variant }}
+          path: evidence/
+          retention-days: 14
+          if-no-files-found: ignore
