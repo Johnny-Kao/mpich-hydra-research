@@ -131,6 +131,33 @@ jobs:
             exit 1
           fi
 
+      - name: Two queued PMI2 waiters - cancel only disconnected owner
+        run: |
+          export PATH="$RUNNER_TEMP/mpich/bin:$PATH"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/mpich/lib:${LD_LIBRARY_PATH:-}"
+          export PMI_RESEARCH_DIR="$(mktemp -d)"
+          set +e
+          timeout -k 3s 30s mpiexec -disable-auto-cleanup -n 3 \
+            ./research/hydra/pmi_lifecycle fault-two-waiters \
+            > research/hydra/results/two-waiters.log 2>&1
+          result=$?
+          set -e
+          cat research/hydra/results/two-waiters.log
+          echo "mpiexec_status=$result" | tee -a research/hydra/results/two-waiters.log
+          if [ "$result" -eq 124 ]; then
+            echo "::error::Two-waiters test timed out"
+            exit 1
+          fi
+          grep -q '^KILL_WAITER pid=' research/hydra/results/two-waiters.log
+          grep -q 'SURVIVING_WAITER_GET rc=0 found=1 value=ready' research/hydra/results/two-waiters.log
+          grep -q 'SURVIVING_WAITER_DONE rc=0' research/hydra/results/two-waiters.log
+          grep -q 'FAULT_PUT_DONE rc=0' research/hydra/results/two-waiters.log
+          if grep -q 'Bad file descriptor' research/hydra/results/two-waiters.log; then
+            echo "::error::Stale PMI2 FD write during two-waiters test"
+            exit 1
+          fi
+          echo 'two_waiters=PASS'
+
       - name: Preserve evidence
         if: always()
         uses: actions/upload-artifact@v4
