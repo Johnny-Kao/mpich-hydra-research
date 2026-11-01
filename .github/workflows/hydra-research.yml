@@ -2,6 +2,9 @@ name: Hydra PMI lifecycle - manual research
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - research/pmi2-review-diagnostics
 
 permissions:
   contents: read
@@ -28,7 +31,7 @@ jobs:
           git diff --name-only origin/main...HEAD | tee changed-files.txt
           while IFS= read -r changed; do
             case "$changed" in
-              src/pm/hydra/proxy/pmip_pmi.c|src/pm/hydra/proxy/pmip_pmi.h|src/pm/hydra/proxy/pmip_cb.c|research/hydra/pmi_lifecycle.c|.github/workflows/hydra-research.yml) ;;
+              src/pm/hydra/proxy/pmip_pmi.c|src/pm/hydra/proxy/pmip_pmi.h|src/pm/hydra/proxy/pmip_cb.c|research/hydra/pmi_lifecycle.c|.github/workflows/hydra-research.yml|test/mpi/impls/pmi/test_pmi2_nodeattr.c|test/mpi/impls/pmi/test_pmi2_nodeattr_fault.c) ;;
               *) echo "::error::Unexpected changed file: $changed"; exit 1 ;;
             esac
           done < changed-files.txt
@@ -97,6 +100,40 @@ jobs:
               }
             test -x "research/hydra/test_pmi${version}"
           done
+
+      - name: Compile review diagnostics with warnings as errors
+        run: |
+          for test_name in test_pmi2_nodeattr test_pmi2_nodeattr_fault; do
+            gcc -std=c11 -O1 -Wall -Wextra -Werror -Wno-unused-parameter \
+              -Isrc/pmi/include -fsyntax-only "test/mpi/impls/pmi/${test_name}.c"
+            ./libtool --mode=link gcc -std=c11 -O1 -g -Wall -Wextra -Werror \
+              -Wno-unused-parameter -Isrc/pmi/include \
+              "test/mpi/impls/pmi/${test_name}.c" \
+              src/pmi/libpmi.la src/mpl/libmpl.la -ldl -lm \
+              -o "research/hydra/${test_name}"
+          done
+
+      - name: Review diagnostics - normal and disconnect fault
+        run: |
+          export PATH="$RUNNER_TEMP/mpich/bin:$PATH"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/mpich/lib:${LD_LIBRARY_PATH:-}"
+          timeout -k 3s 40s mpiexec -n 4 ./research/hydra/test_pmi2_nodeattr \
+            > research/hydra/results/review-normal.log 2>&1
+          cat research/hydra/results/review-normal.log
+          grep -q 'No Errors' research/hydra/results/review-normal.log
+          set +e
+          timeout -k 3s 40s mpiexec -disable-auto-cleanup -n 3 \
+            ./research/hydra/test_pmi2_nodeattr_fault \
+            > research/hydra/results/review-fault.log 2>&1
+          status=$?
+          set -e
+          cat research/hydra/results/review-fault.log
+          echo "mpiexec_status=$status"
+          test "$status" -ne 124
+          test "$status" -ne 137
+          grep -q 'No Errors' research/hydra/results/review-fault.log
+          ! grep -q 'Bad file descriptor' research/hydra/results/review-fault.log
+          echo 'REVIEW_DIAGNOSTICS=PASS'
 
       - name: Run upstream-native PMI-1 and PMI-2 tests
         run: |
