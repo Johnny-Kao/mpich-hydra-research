@@ -26,6 +26,7 @@ jobs:
           ref: 47177894dff2a8a9bb9542385355dde6eaa9209d
           path: mpich
           fetch-depth: 6
+          submodules: recursive
           persist-credentials: false
 
       - name: Verify code provenance and select upstream baseline
