@@ -18,6 +18,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 30
           persist-credentials: false
 
       - name: Source preflight - diff whitespace and changed-file audit
