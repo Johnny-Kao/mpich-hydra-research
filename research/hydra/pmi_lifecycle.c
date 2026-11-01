@@ -63,6 +63,36 @@ static pid_t find_waiter(void)
     exit(3);
 }
 
+/* Confirm Hydra has queued the requests before killing a waiting rank. */
+static void wait_for_queued(int second_waiter)
+{
+    char path[512];
+    if (snprintf(path, sizeof(path), "%s/queued.log", state_dir()) >=
+        (int) sizeof(path))
+        exit(18);
+
+    for (int i = 0; i < 200; i++) {
+        int seen0 = 0, seen2 = !second_waiter;
+        FILE *f = fopen(path, "r");
+        if (f) {
+            int rank;
+            while (fscanf(f, "%d", &rank) == 1) {
+                if (rank == 0) seen0 = 1;
+                if (rank == 2) seen2 = 1;
+            }
+            fclose(f);
+        }
+        if (seen0 && seen2) {
+            printf("QUEUED_CONFIRMED ranks=%s\n",
+                   second_waiter ? "0,2" : "0");
+            return;
+        }
+        delay_ms(100);
+    }
+    fprintf(stderr, "Queued PMI2 requests were not confirmed before kill\n");
+    exit(19);
+}
+
 static void *blocking_get(void *arg)
 {
     (void) arg;
@@ -130,6 +160,8 @@ int main(int argc, char **argv)
     }
     if (rank == 1) {
         pid_t pid = find_waiter();
+        if (strcmp(argv[1], "fault-no-wait"))
+            wait_for_queued(!strcmp(argv[1], "fault-two-waiters"));
         printf("KILL_WAITER pid=%ld\n", (long)pid);
         if (kill(pid, SIGKILL) != 0) { perror("kill"); return 11; }
         delay_ms(600);
