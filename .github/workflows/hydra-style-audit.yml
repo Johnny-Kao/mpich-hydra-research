@@ -39,7 +39,7 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$RUNNER_TEMP/indent-prefix/bin:$PATH"
-          indent --version
+          indent --version || true
           for file in \
             src/pm/hydra/proxy/pmip_pmi.c \
             src/pm/hydra/proxy/pmip_pmi.h \
