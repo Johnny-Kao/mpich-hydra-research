@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Johnny-Kao/mpich
-          ref: 2b4596da5b3e79bc063c989d0517fc7bf1cfa1ee
+          ref: 47177894dff2a8a9bb9542385355dde6eaa9209d
           path: mpich
           persist-credentials: false
       - name: Build project's required GNU indent 2.2.11
@@ -44,7 +44,8 @@ jobs:
             src/pm/hydra/proxy/pmip_pmi.c \
             src/pm/hydra/proxy/pmip_pmi.h \
             src/pm/hydra/proxy/pmip_cb.c \
-            test/mpi/impls/pmi/test_pmi2_nodeattr.c; do
+            test/mpi/impls/pmi/test_pmi2_nodeattr.c \
+            test/mpi/impls/pmi/test_pmi2_nodeattr_fault.c; do
             set +e
             bash -x maint/code-cleanup.bash "$file" > "$RUNNER_TEMP/cleanup.log" 2>&1
             rc=$?
@@ -57,7 +58,7 @@ jobs:
             fi
           done
           git diff --stat
-          git diff -- src/pm/hydra/proxy/pmip_pmi.c src/pm/hydra/proxy/pmip_pmi.h src/pm/hydra/proxy/pmip_cb.c test/mpi/impls/pmi/test_pmi2_nodeattr.c | head -n 200 || true
+          git diff -- src/pm/hydra/proxy/pmip_pmi.c src/pm/hydra/proxy/pmip_pmi.h src/pm/hydra/proxy/pmip_cb.c test/mpi/impls/pmi/test_pmi2_nodeattr.c test/mpi/impls/pmi/test_pmi2_nodeattr_fault.c | head -n 200 || true
           if ! git diff --quiet; then
             echo 'STYLE_AUDIT=REVISE; formatting changes required before PR.'
             exit 1
