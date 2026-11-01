@@ -37,7 +37,7 @@ jobs:
       - name: Bootstrap and configure MPICH
         run: |
           ./autogen.sh > research/hydra/results/autogen.log 2>&1 || { tail -n 100 research/hydra/results/autogen.log; exit 1; }
-          ./configure --prefix="$RUNNER_TEMP/mpich" --with-pm=hydra \
+          CFLAGS="-DHYDRA_RESEARCH_QUEUE_TRACE" ./configure --prefix="$RUNNER_TEMP/mpich" --with-pm=hydra \
             --with-device=ch4:ofi --with-libfabric=embedded \
             --with-yaksa=embedded --with-mpl=embedded \
             --with-hwloc=embedded --disable-fortran --disable-cxx \
@@ -102,61 +102,69 @@ jobs:
           grep -q 'SURVIVOR_DONE rc=0' research/hydra/results/no-wait.log
           echo 'negative_control=survivors_completed_without_pending_request'
 
-      - name: Fault-lifecycle experiment
+      - name: Fault-lifecycle experiment - 3 repetitions, server-side queued-state proof
         run: |
           export PATH="$RUNNER_TEMP/mpich/bin:$PATH"
           export LD_LIBRARY_PATH="$RUNNER_TEMP/mpich/lib:${LD_LIBRARY_PATH:-}"
-          export PMI_RESEARCH_DIR="$(mktemp -d)"
-          set +e
-          timeout -k 3s 30s mpiexec -disable-auto-cleanup -n 3 \
-            ./research/hydra/pmi_lifecycle fault > research/hydra/results/fault.log 2>&1
-          result=$?
-          set -e
-          cat research/hydra/results/fault.log
-          echo "mpiexec_status=$result" | tee -a research/hydra/results/fault.log
-          if [ "$result" -eq 124 ]; then
-            echo '::error::Fault probe timed out'
-            exit 1
-          fi
-          if ! grep -q '^KILL_WAITER pid=' research/hydra/results/fault.log; then
-            echo '::error::Fault injection did not execute; result inconclusive'
-            exit 1
-          fi
-          if grep -q 'FAULT_PUT_DONE rc=0' research/hydra/results/fault.log && \
-             grep -q 'SURVIVOR_DONE rc=0' research/hydra/results/fault.log; then
-            echo 'classification=survivors_completed' | tee -a research/hydra/results/fault.log
-          else
-            echo 'classification=survivors_not_confirmed' | tee -a research/hydra/results/fault.log
-            echo '::error::Survivor completion not confirmed; inspect process and callback logs before attributing cause'
-            exit 1
-          fi
+          for attempt in 1 2 3; do
+            export PMI_RESEARCH_DIR="$(mktemp -d)"
+            logfile="research/hydra/results/fault-${attempt}.log"
+            set +e
+            timeout -k 3s 30s mpiexec -disable-auto-cleanup -n 3 \
+              ./research/hydra/pmi_lifecycle fault > "$logfile" 2>&1
+            result=$?
+            set -e
+            cat "$logfile"
+            echo "mpiexec_status=$result" | tee -a "$logfile"
+            cp "$PMI_RESEARCH_DIR/queued.log" "research/hydra/results/fault-${attempt}-queued.log"
+            grep -q '^0$' "research/hydra/results/fault-${attempt}-queued.log"
+            grep -q '^QUEUED_CONFIRMED ranks=0$' "$logfile"
+            grep -q 'SURVIVOR_DONE rc=0' "$logfile"
+            grep -q '^KILL_WAITER pid=' "$logfile"
+            grep -q 'FAULT_PUT_DONE rc=0' "$logfile"
+            if [ "$result" -eq 124 ] || [ "$result" -eq 255 ]; then
+              echo "::error::PMI2 lifecycle regression (status $result)"
+              exit 1
+            fi
+            if grep -q 'Bad file descriptor' "$logfile"; then
+              echo "::error::Stale PMI FD write"
+              exit 1
+            fi
+            echo "fault_attempt_${attempt}=PASS"
+          done
 
-      - name: Two queued PMI2 waiters - cancel only disconnected owner
+      - name: Two queued PMI2 waiters - cancel only disconnected owner - 3 repetitions, server-side queued-state proof
         run: |
           export PATH="$RUNNER_TEMP/mpich/bin:$PATH"
           export LD_LIBRARY_PATH="$RUNNER_TEMP/mpich/lib:${LD_LIBRARY_PATH:-}"
-          export PMI_RESEARCH_DIR="$(mktemp -d)"
-          set +e
-          timeout -k 3s 30s mpiexec -disable-auto-cleanup -n 3 \
-            ./research/hydra/pmi_lifecycle fault-two-waiters \
-            > research/hydra/results/two-waiters.log 2>&1
-          result=$?
-          set -e
-          cat research/hydra/results/two-waiters.log
-          echo "mpiexec_status=$result" | tee -a research/hydra/results/two-waiters.log
-          if [ "$result" -eq 124 ]; then
-            echo "::error::Two-waiters test timed out"
-            exit 1
-          fi
-          grep -q '^KILL_WAITER pid=' research/hydra/results/two-waiters.log
-          grep -q 'SURVIVING_WAITER_GET rc=0 found=1 value=ready' research/hydra/results/two-waiters.log
-          grep -q 'SURVIVING_WAITER_DONE rc=0' research/hydra/results/two-waiters.log
-          grep -q 'FAULT_PUT_DONE rc=0' research/hydra/results/two-waiters.log
-          if grep -q 'Bad file descriptor' research/hydra/results/two-waiters.log; then
-            echo "::error::Stale PMI2 FD write during two-waiters test"
-            exit 1
-          fi
-          echo 'two_waiters=PASS'
+          for attempt in 1 2 3; do
+            export PMI_RESEARCH_DIR="$(mktemp -d)"
+            logfile="research/hydra/results/two-waiters-${attempt}.log"
+            set +e
+            timeout -k 3s 30s mpiexec -disable-auto-cleanup -n 3 \
+              ./research/hydra/pmi_lifecycle fault-two-waiters > "$logfile" 2>&1
+            result=$?
+            set -e
+            cat "$logfile"
+            echo "mpiexec_status=$result" | tee -a "$logfile"
+            cp "$PMI_RESEARCH_DIR/queued.log" "research/hydra/results/two-waiters-${attempt}-queued.log"
+            grep -q '^0$' "research/hydra/results/two-waiters-${attempt}-queued.log"
+            grep -q '^2$' "research/hydra/results/two-waiters-${attempt}-queued.log"
+            grep -q '^QUEUED_CONFIRMED ranks=0,2$' "$logfile"
+            grep -q 'SURVIVING_WAITER_GET rc=0 found=1 value=ready' "$logfile"
+            grep -q 'SURVIVING_WAITER_DONE rc=0' "$logfile"
+            grep -q '^KILL_WAITER pid=' "$logfile"
+            grep -q 'FAULT_PUT_DONE rc=0' "$logfile"
+            if [ "$result" -eq 124 ] || [ "$result" -eq 255 ]; then
+              echo "::error::PMI2 lifecycle regression (status $result)"
+              exit 1
+            fi
+            if grep -q 'Bad file descriptor' "$logfile"; then
+              echo "::error::Stale PMI FD write"
+              exit 1
+            fi
+            echo "two-waiters_attempt_${attempt}=PASS"
+          done
 
       - name: Preserve evidence
         if: always()
